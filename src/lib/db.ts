@@ -1,0 +1,126 @@
+// src/lib/db.ts
+import {
+  db,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  addDoc,
+  query,
+  where,
+  orderBy,
+  serverTimestamp,
+} from "./firebase";
+import { WorkshopSettings, Team, DailySubmission, MaterialItem } from "@/types";
+import { DEFAULT_MATERIALS, DEFAULT_SETTINGS, WORKSHOP_ID } from "./defaultData";
+
+// ─── Workshop Settings ────────────────────────────────────────────────
+
+export async function getWorkshopSettings(): Promise<WorkshopSettings | null> {
+  const ref = doc(db, "workshops", WORKSHOP_ID);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() } as WorkshopSettings;
+}
+
+export async function initializeWorkshop(): Promise<WorkshopSettings> {
+  const existing = await getWorkshopSettings();
+  if (existing) return existing;
+
+  const materials: MaterialItem[] = DEFAULT_MATERIALS.map((m, i) => ({
+    ...m,
+    id: `mat-${i + 1}`,
+  }));
+
+  const settings: Omit<WorkshopSettings, "id"> = {
+    ...DEFAULT_SETTINGS,
+    materials,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  await setDoc(doc(db, "workshops", WORKSHOP_ID), settings);
+  return { id: WORKSHOP_ID, ...settings };
+}
+
+export async function updateWorkshopSettings(
+  updates: Partial<Omit<WorkshopSettings, "id" | "createdAt">>
+): Promise<void> {
+  await updateDoc(doc(db, "workshops", WORKSHOP_ID), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+// ─── Teams ───────────────────────────────────────────────────────────
+
+export async function getTeams(): Promise<Team[]> {
+  const q = query(
+    collection(db, "teams"),
+    where("workshopId", "==", WORKSHOP_ID),
+    orderBy("namaTeam")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Team));
+}
+
+export async function createTeam(namaTeam: string): Promise<Team> {
+  const ref = await addDoc(collection(db, "teams"), {
+    namaTeam,
+    workshopId: WORKSHOP_ID,
+    createdAt: serverTimestamp(),
+  });
+  return { id: ref.id, namaTeam, workshopId: WORKSHOP_ID };
+}
+
+export async function deleteTeam(teamId: string): Promise<void> {
+  const { deleteDoc } = await import("firebase/firestore");
+  await deleteDoc(doc(db, "teams", teamId));
+}
+
+// ─── Daily Submissions ────────────────────────────────────────────────
+
+export async function getTeamSubmissions(teamId: string): Promise<DailySubmission[]> {
+  const q = query(
+    collection(db, "submissions"),
+    where("teamId", "==", teamId),
+    where("workshopId", "==", WORKSHOP_ID),
+    orderBy("hari")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as DailySubmission));
+}
+
+export async function getAllSubmissions(): Promise<DailySubmission[]> {
+  const q = query(
+    collection(db, "submissions"),
+    where("workshopId", "==", WORKSHOP_ID),
+    orderBy("hari")
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as DailySubmission));
+}
+
+export async function submitDailyPurchase(
+  submission: Omit<DailySubmission, "id" | "submittedAt" | "locked">
+): Promise<string> {
+  const ref = await addDoc(collection(db, "submissions"), {
+    ...submission,
+    locked: true,
+    submittedAt: serverTimestamp(),
+  });
+  return ref.id;
+}
+
+export async function checkDaySubmitted(teamId: string, hari: number): Promise<boolean> {
+  const q = query(
+    collection(db, "submissions"),
+    where("teamId", "==", teamId),
+    where("workshopId", "==", WORKSHOP_ID),
+    where("hari", "==", hari)
+  );
+  const snap = await getDocs(q);
+  return !snap.empty;
+}
