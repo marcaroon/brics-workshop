@@ -1184,9 +1184,6 @@ export default function AdminPage() {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
                       Total Nilai Project (Rp){" "}
-                      <span className="text-slate-400 font-normal">
-                        — referensi
-                      </span>
                     </label>
                     <input
                       type="number"
@@ -1206,9 +1203,6 @@ export default function AdminPage() {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">
                       Maksimal Pengeluaran (Rp){" "}
-                      <span className="text-slate-400 font-normal">
-                        — referensi
-                      </span>
                     </label>
                     <input
                       type="number"
