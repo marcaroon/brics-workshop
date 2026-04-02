@@ -10,6 +10,7 @@ import {
   getAllSubmissions,
   getAllPaymentStatuses,
   setPaymentStatus,
+  resetAllSubmissions,
 } from "@/lib/db";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import {
@@ -49,11 +50,10 @@ import {
   X,
   Upload,
   CloudOff,
+  RotateCcw,
 } from "lucide-react";
 
 type Tab = "monitor" | "payments" | "leaderboard" | "teams" | "settings";
-
-// ─── Drag-to-reorder helpers ──────────────────────────────────────────
 
 interface DragState {
   draggingIdx: number | null;
@@ -79,14 +79,13 @@ export default function AdminPage() {
     {},
   );
   const [savingPayment, setSavingPayment] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
 
-  // Drag state for material reorder
   const [drag, setDrag] = useState<DragState>({
     draggingIdx: null,
     overIdx: null,
   });
 
-  // Per-material upload state: idx -> "uploading" | "done" | "error"
   const [uploadState, setUploadState] = useState<
     Record<number, "uploading" | "done" | "error">
   >({});
@@ -181,6 +180,34 @@ export default function AdminPage() {
     });
   }
 
+  // ─── Reset handler ────────────────────────────────────────────────
+
+  async function handleResetSubmissions() {
+    const totalSubs = summaries.reduce((s, t) => s + t.submissions.length, 0);
+    const confirmed = confirm(
+      `Reset data transaksi?\n\nIni akan menghapus:\n• ${totalSubs} submission dari semua tim\n• Semua status pembayaran\n\nPengaturan workshop, daftar tim, dan material TIDAK akan berubah.\n\nLanjutkan?`,
+    );
+    if (!confirmed) return;
+
+    // Second confirmation — destructive action
+    const reconfirmed = confirm(
+      "Yakin? Data yang dihapus tidak bisa dipulihkan.",
+    );
+    if (!reconfirmed) return;
+
+    setResetting(true);
+    try {
+      await resetAllSubmissions();
+      await load();
+      alert("Reset berhasil! Semua data transaksi telah dihapus.");
+    } catch (err) {
+      alert("Reset gagal. Coba lagi.");
+      console.error(err);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   // ─── Payment handlers ─────────────────────────────────────────────
 
   async function handleTogglePayment(
@@ -234,7 +261,6 @@ export default function AdminPage() {
   async function handleSaveSettings(e: React.FormEvent) {
     e.preventDefault();
     setSavingSettings(true);
-    // Re-stamp order field based on current array position
     const materials = settingsForm.materials?.map((m, i) => ({
       ...m,
       order: i,
@@ -382,6 +408,11 @@ export default function AdminPage() {
     { key: "settings", label: "Pengaturan", icon: Settings },
   ];
 
+  const totalSubmissions = summaries.reduce(
+    (s, t) => s + t.submissions.length,
+    0,
+  );
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
@@ -500,7 +531,6 @@ export default function AdminPage() {
                   totalPendapatan,
                   totalPerMaterial,
                 } = summary;
-                // Budget = payments received (totalPendapatan), not maxPengeluaran
                 const status = getSpendingStatus(
                   totalPengeluaran,
                   totalPendapatan,
@@ -552,7 +582,6 @@ export default function AdminPage() {
                           </p>
                         </div>
                       </div>
-                      {/* Progress bar: spend vs budget-received */}
                       <div className="w-full bg-slate-200 rounded-full h-2.5">
                         <div
                           className={`${status.barColor} h-2.5 rounded-full`}
@@ -1095,396 +1124,430 @@ export default function AdminPage() {
             TAB: PENGATURAN
         ═══════════════════════════════════════════════════════ */}
         {tab === "settings" && (
-          <form onSubmit={handleSaveSettings} className="space-y-5 max-w-2xl">
-            {/* Workshop info */}
-            <div className="card space-y-4">
-              <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                <Settings className="w-5 h-5 text-blue-600" /> Pengaturan
-                Workshop
-              </h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Nama Workshop
-                  </label>
-                  <input
-                    className="input-field"
-                    value={settingsForm.namaWorkshop ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        namaWorkshop: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Jumlah Hari
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    className="input-field"
-                    value={settingsForm.jumlahHari ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        jumlahHari: Number(e.target.value),
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Password Admin
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={settingsForm.adminPassword ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        adminPassword: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Total Nilai Project (Rp){" "}
-                    <span className="text-slate-400 font-normal">
-                      — referensi
-                    </span>
-                  </label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={settingsForm.maxPengeluaran ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        maxPengeluaran: Number(e.target.value),
-                      }))
-                    }
-                  />
-                  <p className="text-xs text-slate-400 mt-1">
-                    {formatRupiah(settingsForm.maxPengeluaran ?? 0)}
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Maksimal Pengeluaran (Rp){" "}
-                    <span className="text-slate-400 font-normal">
-                      — referensi
-                    </span>
-                  </label>
-                  <input
-                    type="number"
-                    className="input-field"
-                    value={settingsForm.jumlahPendapatan ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        jumlahPendapatan: Number(e.target.value),
-                      }))
-                    }
-                  />
-                  <p className="text-xs text-slate-400 mt-1">
-                    {formatRupiah(settingsForm.jumlahPendapatan ?? 0)}
-                  </p>
-                </div>
-              </div>
-              {/* <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
-                ℹ️ Anggaran belanja tim ditentukan oleh total pembayaran yang
-                telah diterima (tab Pembayaran), bukan oleh nilai di atas.
-              </div> */}
-            </div>
-
-            {/* Cloudinary config */}
-            <div className="card space-y-4">
-              <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                <CloudOff className="w-5 h-5 text-blue-600" /> Konfigurasi
-                Cloudinary
-              </h2>
-              <p className="text-xs text-slate-500">
-                Diperlukan untuk mengupload gambar material. Buat akun gratis di{" "}
-                <a
-                  href="https://cloudinary.com"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-600 underline"
-                >
-                  cloudinary.com
-                </a>
-                , lalu buat <strong>unsigned upload preset</strong>.
-              </p>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Cloud Name
-                  </label>
-                  <input
-                    className="input-field"
-                    placeholder="contoh: my-cloud"
-                    value={settingsForm.cloudinaryCloudName ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        cloudinaryCloudName: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Upload Preset (unsigned)
-                  </label>
-                  <input
-                    className="input-field"
-                    placeholder="contoh: brics_unsigned"
-                    value={settingsForm.cloudinaryUploadPreset ?? ""}
-                    onChange={(e) =>
-                      setSettingsForm((p) => ({
-                        ...p,
-                        cloudinaryUploadPreset: e.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Payment Stages */}
-            <div className="card">
-              <div className="flex items-center justify-between mb-4">
+          <div className="space-y-5 max-w-2xl">
+            <form onSubmit={handleSaveSettings} className="space-y-5">
+              {/* Workshop info */}
+              <div className="card space-y-4">
                 <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                  <CreditCard className="w-5 h-5 text-blue-600" /> Tahapan
-                  Pembayaran
+                  <Settings className="w-5 h-5 text-blue-600" /> Pengaturan
+                  Workshop
                 </h2>
-                <button
-                  type="button"
-                  onClick={addPaymentStage}
-                  className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"
-                >
-                  <Plus className="w-4 h-4" /> Tambah Tahap
-                </button>
-              </div>
-              <div className="overflow-x-auto rounded-xl border border-slate-200">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-slate-500 text-xs">
-                      <th className="px-3 py-2.5">#</th>
-                      <th className="px-3 py-2.5">Label</th>
-                      <th className="px-3 py-2.5 w-40">Nominal (Rp)</th>
-                      <th className="px-3 py-2.5 w-10"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {settingsForm.paymentStages?.map((s, i) => (
-                      <tr key={s.id} className="border-t border-slate-100">
-                        <td className="px-3 py-1.5 text-slate-400 text-xs">
-                          {i + 1}
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <input
-                            className="input-field text-xs"
-                            value={s.label}
-                            onChange={(e) =>
-                              updateStage(i, "label", e.target.value)
-                            }
-                          />
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <input
-                            type="number"
-                            className="input-field text-xs"
-                            value={s.nominal}
-                            onChange={(e) =>
-                              updateStage(i, "nominal", e.target.value)
-                            }
-                          />
-                        </td>
-                        <td className="px-3 py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => removePaymentStage(i)}
-                            className="p-1 text-red-400 hover:text-red-600 rounded"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-slate-50 border-t-2 border-slate-200">
-                    <tr>
-                      <td
-                        className="px-3 py-2.5 font-bold text-slate-700"
-                        colSpan={2}
-                      >
-                        TOTAL
-                      </td>
-                      <td className="px-3 py-2.5 font-bold text-blue-700 text-xs">
-                        {formatRupiah(
-                          settingsForm.paymentStages?.reduce(
-                            (s, p) => s + p.nominal,
-                            0,
-                          ) ?? 0,
-                        )}
-                      </td>
-                      <td />
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-              <p className="text-xs text-slate-400 mt-2">
-                ⚠️ Perubahan nominal tidak mempengaruhi pembayaran yang sudah
-                dicatat.
-              </p>
-            </div>
-
-            {/* Materials — drag-to-reorder + image upload */}
-            <div className="card">
-              <h2 className="font-semibold text-slate-800 mb-1 flex items-center gap-2">
-                <Package className="w-5 h-5 text-blue-600" /> Data Material &
-                SDM
-              </h2>
-              <p className="text-xs text-slate-500 mb-4">
-                Seret baris (≡) untuk mengurutkan ulang. Klik ikon gambar untuk
-                mengunggah foto material.
-              </p>
-
-              <div className="space-y-2">
-                {settingsForm.materials?.map((m, i) => {
-                  const isDragging = drag.draggingIdx === i;
-                  const isOver = drag.overIdx === i && drag.draggingIdx !== i;
-                  const uploading = uploadState[i] === "uploading";
-
-                  return (
-                    <div
-                      key={m.id}
-                      draggable
-                      onDragStart={() => handleDragStart(i)}
-                      onDragEnter={() => handleDragEnter(i)}
-                      onDragOver={(e) => e.preventDefault()}
-                      onDragEnd={handleDragEnd}
-                      className={`flex items-center gap-2 p-2 rounded-xl border transition-all select-none
-                        ${isDragging ? "opacity-40 scale-95 bg-blue-50 border-blue-300" : ""}
-                        ${isOver ? "border-blue-400 bg-blue-50 shadow-md" : "border-slate-200 bg-white"}
-                      `}
-                    >
-                      {/* Drag handle */}
-                      <button
-                        type="button"
-                        className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 px-1 flex-shrink-0"
-                        title="Seret untuk mengurutkan"
-                      >
-                        <GripVertical className="w-4 h-4" />
-                      </button>
-
-                      {/* Row number */}
-                      <span className="text-xs text-slate-400 w-5 text-center flex-shrink-0">
-                        {i + 1}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Nama Workshop
+                    </label>
+                    <input
+                      className="input-field"
+                      value={settingsForm.namaWorkshop ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          namaWorkshop: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Jumlah Hari
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      className="input-field"
+                      value={settingsForm.jumlahHari ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          jumlahHari: Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Password Admin
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      value={settingsForm.adminPassword ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          adminPassword: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Total Nilai Project (Rp){" "}
+                      <span className="text-slate-400 font-normal">
+                        — referensi
                       </span>
+                    </label>
+                    <input
+                      type="number"
+                      className="input-field"
+                      value={settingsForm.maxPengeluaran ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          maxPengeluaran: Number(e.target.value),
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-slate-400 mt-1">
+                      {formatRupiah(settingsForm.maxPengeluaran ?? 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Maksimal Pengeluaran (Rp){" "}
+                      <span className="text-slate-400 font-normal">
+                        — referensi
+                      </span>
+                    </label>
+                    <input
+                      type="number"
+                      className="input-field"
+                      value={settingsForm.jumlahPendapatan ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          jumlahPendapatan: Number(e.target.value),
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-slate-400 mt-1">
+                      {formatRupiah(settingsForm.jumlahPendapatan ?? 0)}
+                    </p>
+                  </div>
+                </div>
+              </div>
 
-                      {/* Thumbnail / upload */}
-                      <div className="relative flex-shrink-0">
-                        {m.imageUrl ? (
-                          <div className="relative group">
-                            <img src={m.imageUrl} alt={m.namaKomponen} className="w-10 h-10 rounded-lg object-cover border border-slate-200" />
+              {/* Cloudinary config */}
+              <div className="card space-y-4">
+                <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+                  <CloudOff className="w-5 h-5 text-blue-600" /> Konfigurasi
+                  Cloudinary
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Diperlukan untuk mengupload gambar material. Buat akun gratis
+                  di{" "}
+                  <a
+                    href="https://cloudinary.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 underline"
+                  >
+                    cloudinary.com
+                  </a>
+                  , lalu buat <strong>unsigned upload preset</strong>.
+                </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Cloud Name
+                    </label>
+                    <input
+                      className="input-field"
+                      placeholder="contoh: my-cloud"
+                      value={settingsForm.cloudinaryCloudName ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          cloudinaryCloudName: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Upload Preset (unsigned)
+                    </label>
+                    <input
+                      className="input-field"
+                      placeholder="contoh: brics_unsigned"
+                      value={settingsForm.cloudinaryUploadPreset ?? ""}
+                      onChange={(e) =>
+                        setSettingsForm((p) => ({
+                          ...p,
+                          cloudinaryUploadPreset: e.target.value,
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Stages */}
+              <div className="card">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-semibold text-slate-800 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-blue-600" /> Tahapan
+                    Pembayaran
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={addPaymentStage}
+                    className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    <Plus className="w-4 h-4" /> Tambah Tahap
+                  </button>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50">
+                      <tr className="text-left text-slate-500 text-xs">
+                        <th className="px-3 py-2.5">#</th>
+                        <th className="px-3 py-2.5">Label</th>
+                        <th className="px-3 py-2.5 w-40">Nominal (Rp)</th>
+                        <th className="px-3 py-2.5 w-10"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {settingsForm.paymentStages?.map((s, i) => (
+                        <tr key={s.id} className="border-t border-slate-100">
+                          <td className="px-3 py-1.5 text-slate-400 text-xs">
+                            {i + 1}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input
+                              className="input-field text-xs"
+                              value={s.label}
+                              onChange={(e) =>
+                                updateStage(i, "label", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <input
+                              type="number"
+                              className="input-field text-xs"
+                              value={s.nominal}
+                              onChange={(e) =>
+                                updateStage(i, "nominal", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="px-3 py-1.5">
                             <button
                               type="button"
-                              onClick={() => removeMaterialImage(i)}
-                              className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full hidden group-hover:flex items-center justify-center"
+                              onClick={() => removePaymentStage(i)}
+                              className="p-1 text-red-400 hover:text-red-600 rounded"
                             >
-                              <X className="w-2.5 h-2.5" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                          </div>
-                        ) : (
-                          <label className={`w-10 h-10 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer transition-colors
-                            ${uploading ? "border-blue-400 bg-blue-50" : "border-slate-300 hover:border-blue-400 hover:bg-blue-50"}`}>
-                            {uploading ? (
-                              <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                            ) : (
-                              <Upload className="w-4 h-4 text-slate-400" />
-                            )}
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              disabled={uploading}
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) handleImageUpload(i, file);
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                        )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                      <tr>
+                        <td
+                          className="px-3 py-2.5 font-bold text-slate-700"
+                          colSpan={2}
+                        >
+                          TOTAL
+                        </td>
+                        <td className="px-3 py-2.5 font-bold text-blue-700 text-xs">
+                          {formatRupiah(
+                            settingsForm.paymentStages?.reduce(
+                              (s, p) => s + p.nominal,
+                              0,
+                            ) ?? 0,
+                          )}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <p className="text-xs text-slate-400 mt-2">
+                  ⚠️ Perubahan nominal tidak mempengaruhi pembayaran yang sudah
+                  dicatat.
+                </p>
+              </div>
+
+              {/* Materials */}
+              <div className="card">
+                <h2 className="font-semibold text-slate-800 mb-1 flex items-center gap-2">
+                  <Package className="w-5 h-5 text-blue-600" /> Data Material &
+                  SDM
+                </h2>
+                <p className="text-xs text-slate-500 mb-4">
+                  Seret baris (≡) untuk mengurutkan ulang. Klik ikon gambar
+                  untuk mengunggah foto material.
+                </p>
+
+                <div className="space-y-2">
+                  {settingsForm.materials?.map((m, i) => {
+                    const isDragging = drag.draggingIdx === i;
+                    const isOver = drag.overIdx === i && drag.draggingIdx !== i;
+                    const uploading = uploadState[i] === "uploading";
+
+                    return (
+                      <div
+                        key={m.id}
+                        draggable
+                        onDragStart={() => handleDragStart(i)}
+                        onDragEnter={() => handleDragEnter(i)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDragEnd={handleDragEnd}
+                        className={`flex items-center gap-2 p-2 rounded-xl border transition-all select-none
+                          ${isDragging ? "opacity-40 scale-95 bg-blue-50 border-blue-300" : ""}
+                          ${isOver ? "border-blue-400 bg-blue-50 shadow-md" : "border-slate-200 bg-white"}
+                        `}
+                      >
+                        <button
+                          type="button"
+                          className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 px-1 flex-shrink-0"
+                          title="Seret untuk mengurutkan"
+                        >
+                          <GripVertical className="w-4 h-4" />
+                        </button>
+                        <span className="text-xs text-slate-400 w-5 text-center flex-shrink-0">
+                          {i + 1}
+                        </span>
+                        <div className="relative flex-shrink-0">
+                          {m.imageUrl ? (
+                            <div className="relative group">
+                              <img
+                                src={m.imageUrl}
+                                alt={m.namaKomponen}
+                                className="w-10 h-10 rounded-lg object-cover border border-slate-200"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeMaterialImage(i)}
+                                className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full hidden group-hover:flex items-center justify-center"
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <label
+                              className={`w-10 h-10 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer transition-colors
+                              ${uploading ? "border-blue-400 bg-blue-50" : "border-slate-300 hover:border-blue-400 hover:bg-blue-50"}`}
+                            >
+                              {uploading ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+                              ) : (
+                                <Upload className="w-4 h-4 text-slate-400" />
+                              )}
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                disabled={uploading}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) handleImageUpload(i, file);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                          )}
+                        </div>
+                        <input
+                          className="input-field text-xs flex-1 min-w-0"
+                          value={m.namaKomponen}
+                          onChange={(e) =>
+                            updateMaterial(i, "namaKomponen", e.target.value)
+                          }
+                        />
+                        <input
+                          className="input-field text-xs w-20 flex-shrink-0"
+                          value={m.satuan}
+                          onChange={(e) =>
+                            updateMaterial(i, "satuan", e.target.value)
+                          }
+                        />
+                        <input
+                          type="number"
+                          className="input-field text-xs w-28 flex-shrink-0"
+                          value={m.hargaPerPcs}
+                          onChange={(e) =>
+                            updateMaterial(i, "hargaPerPcs", e.target.value)
+                          }
+                        />
                       </div>
+                    );
+                  })}
+                </div>
 
-                      {/* Name */}
-                      <input
-                        className="input-field text-xs flex-1 min-w-0"
-                        value={m.namaKomponen}
-                        onChange={(e) =>
-                          updateMaterial(i, "namaKomponen", e.target.value)
-                        }
-                      />
+                <div className="flex items-center gap-2 mt-2 px-2 text-xs text-slate-400">
+                  <span className="w-4 flex-shrink-0" />
+                  <span className="w-5 flex-shrink-0" />
+                  <span className="w-10 flex-shrink-0 text-center">Foto</span>
+                  <span className="flex-1">Nama Komponen</span>
+                  <span className="w-20 flex-shrink-0">Satuan</span>
+                  <span className="w-28 flex-shrink-0">Harga/Satuan (Rp)</span>
+                </div>
 
-                      {/* Satuan */}
-                      <input
-                        className="input-field text-xs w-20 flex-shrink-0"
-                        value={m.satuan}
-                        onChange={(e) =>
-                          updateMaterial(i, "satuan", e.target.value)
-                        }
-                      />
-
-                      {/* Harga */}
-                      <input
-                        type="number"
-                        className="input-field text-xs w-28 flex-shrink-0"
-                        value={m.hargaPerPcs}
-                        onChange={(e) =>
-                          updateMaterial(i, "hargaPerPcs", e.target.value)
-                        }
-                      />
-                    </div>
-                  );
-                })}
+                <p className="text-xs text-slate-400 mt-3">
+                  ⚠️ Perubahan harga tidak mempengaruhi submission yang sudah
+                  ada.
+                </p>
               </div>
 
-              {/* Column labels */}
-              <div className="flex items-center gap-2 mt-2 px-2 text-xs text-slate-400">
-                <span className="w-4 flex-shrink-0" />
-                <span className="w-5 flex-shrink-0" />
-                <span className="w-10 flex-shrink-0 text-center">Foto</span>
-                <span className="flex-1">Nama Komponen</span>
-                <span className="w-20 flex-shrink-0">Satuan</span>
-                <span className="w-28 flex-shrink-0">Harga/Satuan (Rp)</span>
-              </div>
+              <button
+                type="submit"
+                disabled={savingSettings}
+                className="btn-primary flex items-center gap-2"
+              >
+                {savingSettings ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                {savingSettings ? "Menyimpan..." : "Simpan Semua Pengaturan"}
+              </button>
+            </form>
 
-              <p className="text-xs text-slate-400 mt-3">
-                ⚠️ Perubahan harga tidak mempengaruhi submission yang sudah ada.
+            {/* ── Danger Zone ── */}
+            <div className="card border-red-200 bg-red-50/50">
+              <h2 className="font-semibold text-red-700 flex items-center gap-2 mb-1">
+                <RotateCcw className="w-5 h-5" /> Reset Data Transaksi
+              </h2>
+              <p className="text-xs text-slate-600 mb-4">
+                Hapus semua riwayat pembelian dan status pembayaran dari seluruh
+                tim. Pengaturan workshop, daftar tim, dan data material{" "}
+                <strong>tidak akan berubah</strong>. Gunakan fitur ini untuk
+                memulai ulang workshop dengan template yang sama.
               </p>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-500">
+                  {totalSubmissions > 0 ? (
+                    <span className="font-semibold text-red-600">
+                      {totalSubmissions} submission aktif
+                    </span>
+                  ) : (
+                    <span className="text-green-600 font-semibold">
+                      Tidak ada data transaksi
+                    </span>
+                  )}{" "}
+                  dari {teams.length} tim
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetSubmissions}
+                  disabled={resetting || totalSubmissions === 0}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {resetting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RotateCcw className="w-4 h-4" />
+                  )}
+                  {resetting ? "Mereset..." : "Reset Transaksi"}
+                </button>
+              </div>
             </div>
-
-            <button
-              type="submit"
-              disabled={savingSettings}
-              className="btn-primary flex items-center gap-2"
-            >
-              {savingSettings ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Save className="w-4 h-4" />
-              )}
-              {savingSettings ? "Menyimpan..." : "Simpan Semua Pengaturan"}
-            </button>
-          </form>
+          </div>
         )}
       </div>
     </div>

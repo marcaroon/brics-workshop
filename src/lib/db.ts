@@ -13,8 +13,19 @@ import {
   orderBy,
   serverTimestamp,
 } from "./firebase";
-import { WorkshopSettings, Team, DailySubmission, MaterialItem, TeamPaymentStatus } from "@/types";
-import { DEFAULT_MATERIALS, DEFAULT_PAYMENT_STAGES, DEFAULT_SETTINGS, WORKSHOP_ID } from "./defaultData";
+import {
+  WorkshopSettings,
+  Team,
+  DailySubmission,
+  MaterialItem,
+  TeamPaymentStatus,
+} from "@/types";
+import {
+  DEFAULT_MATERIALS,
+  DEFAULT_PAYMENT_STAGES,
+  DEFAULT_SETTINGS,
+  WORKSHOP_ID,
+} from "./defaultData";
 
 // ─── Workshop Settings ────────────────────────────────────────────────
 
@@ -48,7 +59,7 @@ export async function initializeWorkshop(): Promise<WorkshopSettings> {
 }
 
 export async function updateWorkshopSettings(
-  updates: Partial<Omit<WorkshopSettings, "id" | "createdAt">>
+  updates: Partial<Omit<WorkshopSettings, "id" | "createdAt">>,
 ): Promise<void> {
   await updateDoc(doc(db, "workshops", WORKSHOP_ID), {
     ...updates,
@@ -62,10 +73,10 @@ export async function getTeams(): Promise<Team[]> {
   const q = query(
     collection(db, "teams"),
     where("workshopId", "==", WORKSHOP_ID),
-    orderBy("namaTeam")
+    orderBy("namaTeam"),
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as Team));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as Team);
 }
 
 export async function createTeam(namaTeam: string): Promise<Team> {
@@ -84,29 +95,31 @@ export async function deleteTeam(teamId: string): Promise<void> {
 
 // ─── Daily Submissions ────────────────────────────────────────────────
 
-export async function getTeamSubmissions(teamId: string): Promise<DailySubmission[]> {
+export async function getTeamSubmissions(
+  teamId: string,
+): Promise<DailySubmission[]> {
   const q = query(
     collection(db, "submissions"),
     where("teamId", "==", teamId),
     where("workshopId", "==", WORKSHOP_ID),
-    orderBy("hari")
+    orderBy("hari"),
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as DailySubmission));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as DailySubmission);
 }
 
 export async function getAllSubmissions(): Promise<DailySubmission[]> {
   const q = query(
     collection(db, "submissions"),
     where("workshopId", "==", WORKSHOP_ID),
-    orderBy("hari")
+    orderBy("hari"),
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() } as DailySubmission));
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }) as DailySubmission);
 }
 
 export async function submitDailyPurchase(
-  submission: Omit<DailySubmission, "id" | "submittedAt" | "locked">
+  submission: Omit<DailySubmission, "id" | "submittedAt" | "locked">,
 ): Promise<string> {
   const ref = await addDoc(collection(db, "submissions"), {
     ...submission,
@@ -116,15 +129,44 @@ export async function submitDailyPurchase(
   return ref.id;
 }
 
-export async function checkDaySubmitted(teamId: string, hari: number): Promise<boolean> {
+export async function checkDaySubmitted(
+  teamId: string,
+  hari: number,
+): Promise<boolean> {
   const q = query(
     collection(db, "submissions"),
     where("teamId", "==", teamId),
     where("workshopId", "==", WORKSHOP_ID),
-    where("hari", "==", hari)
+    where("hari", "==", hari),
   );
   const snap = await getDocs(q);
   return !snap.empty;
+}
+
+// ─── Reset (submissions + payment statuses only) ──────────────────────
+
+export async function resetAllSubmissions(): Promise<void> {
+  const { deleteDoc } = await import("firebase/firestore");
+
+  const [subSnap, paySnap] = await Promise.all([
+    getDocs(
+      query(
+        collection(db, "submissions"),
+        where("workshopId", "==", WORKSHOP_ID),
+      ),
+    ),
+    getDocs(
+      query(
+        collection(db, "paymentStatuses"),
+        where("workshopId", "==", WORKSHOP_ID),
+      ),
+    ),
+  ]);
+
+  await Promise.all([
+    ...subSnap.docs.map((d) => deleteDoc(d.ref)),
+    ...paySnap.docs.map((d) => deleteDoc(d.ref)),
+  ]);
 }
 
 // ─── Payment Statuses ─────────────────────────────────────────────────
@@ -137,17 +179,19 @@ function paymentDocId(teamId: string, stageId: string) {
 export async function getAllPaymentStatuses(): Promise<TeamPaymentStatus[]> {
   const q = query(
     collection(db, "paymentStatuses"),
-    where("workshopId", "==", WORKSHOP_ID)
+    where("workshopId", "==", WORKSHOP_ID),
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => d.data() as TeamPaymentStatus);
 }
 
-export async function getTeamPaymentStatuses(teamId: string): Promise<TeamPaymentStatus[]> {
+export async function getTeamPaymentStatuses(
+  teamId: string,
+): Promise<TeamPaymentStatus[]> {
   const q = query(
     collection(db, "paymentStatuses"),
     where("workshopId", "==", WORKSHOP_ID),
-    where("teamId", "==", teamId)
+    where("teamId", "==", teamId),
   );
   const snap = await getDocs(q);
   return snap.docs.map((d) => d.data() as TeamPaymentStatus);
@@ -158,7 +202,7 @@ export async function setPaymentStatus(
   stageId: string,
   completed: boolean,
   bonus: number,
-  penalty: number
+  penalty: number,
 ): Promise<void> {
   const docId = paymentDocId(teamId, stageId);
   await setDoc(doc(db, "paymentStatuses", docId), {
