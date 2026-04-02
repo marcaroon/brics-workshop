@@ -32,6 +32,7 @@ export async function initializeWorkshop(): Promise<WorkshopSettings> {
   const materials: MaterialItem[] = DEFAULT_MATERIALS.map((m, i) => ({
     ...m,
     id: `mat-${i + 1}`,
+    order: i,
   }));
 
   const settings: Omit<WorkshopSettings, "id"> = {

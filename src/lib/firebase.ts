@@ -17,13 +17,12 @@ import {
 } from "firebase/firestore";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyDZI5JchUqJVlS7M50aE2lYa5FANxuLPKk",
-  authDomain: "brics-workshop.firebaseapp.com",
-  projectId: "brics-workshop",
-  storageBucket: "brics-workshop.firebasestorage.app",
-  messagingSenderId: "66960908651",
-  appId: "1:66960908651:web:fa5f947d2d76c419886c2e",
-  measurementId: "G-1FTJRDFXJR",
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 };
 
 const app =

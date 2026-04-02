@@ -5,6 +5,8 @@ export interface MaterialItem {
   namaKomponen: string;
   satuan: string;
   hargaPerPcs: number;
+  imageUrl?: string; // Cloudinary URL
+  order?: number;    // for drag-to-reorder
 }
 
 export interface PaymentStage {
@@ -27,11 +29,16 @@ export interface WorkshopSettings {
   id: string;
   namaWorkshop: string;
   jumlahHari: number;
+  // maxPengeluaran = budget cap (reference only — shown on admin)
   maxPengeluaran: number;
-  jumlahPendapatan: number; // Total Nilai Project (base, before stage payments)
+  // jumlahPendapatan = Total Project Value (reference only — shown on admin)
+  jumlahPendapatan: number;
   adminPassword: string;
   materials: MaterialItem[];
   paymentStages: PaymentStage[];
+  // Cloudinary config (stored in settings so it's accessible client-side)
+  cloudinaryCloudName?: string;
+  cloudinaryUploadPreset?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

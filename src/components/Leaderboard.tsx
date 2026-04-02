@@ -22,47 +22,33 @@ export default function Leaderboard({ summaries, settings }: Props) {
     <div className="space-y-3">
       {ranked.map((summary, idx) => {
         const keuntungan = summary.totalPendapatan - summary.totalPengeluaran;
-        const status = getSpendingStatus(
-          summary.totalPengeluaran,
-          settings.maxPengeluaran,
-        );
-        const pct = Math.min(
-          (summary.totalPengeluaran / settings.maxPengeluaran) * 100,
-          100,
-        );
-        const stagesCompleted = summary.paymentStatuses.filter(
-          (p) => p.completed,
-        ).length;
+        // Budget = payments received (totalPendapatan)
+        const status = getSpendingStatus(summary.totalPengeluaran, summary.totalPendapatan);
+        const pct = summary.totalPendapatan > 0
+          ? Math.min((summary.totalPengeluaran / summary.totalPendapatan) * 100, 100)
+          : 0;
+        const stagesCompleted = summary.paymentStatuses.filter((p) => p.completed).length;
 
         return (
           <div
             key={summary.team.id}
             className={`card border-l-4 ${
-              idx === 0
-                ? "border-l-yellow-400"
-                : idx === 1
-                  ? "border-l-slate-400"
-                  : idx === 2
-                    ? "border-l-amber-600"
-                    : "border-l-slate-200"
+              idx === 0 ? "border-l-yellow-400"
+              : idx === 1 ? "border-l-slate-400"
+              : idx === 2 ? "border-l-amber-600"
+              : "border-l-slate-200"
             }`}
           >
             <div className="flex items-center gap-4">
               <div className="text-2xl w-10 text-center flex-shrink-0">
-                {idx < 3 ? (
-                  medals[idx]
-                ) : (
-                  <span className="text-slate-400 font-bold text-lg">
-                    {idx + 1}
-                  </span>
+                {idx < 3 ? medals[idx] : (
+                  <span className="text-slate-400 font-bold text-lg">{idx + 1}</span>
                 )}
               </div>
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="font-bold text-slate-800">
-                    {summary.team.namaTeam}
-                  </p>
+                  <p className="font-bold text-slate-800">{summary.team.namaTeam}</p>
                   <div className="flex items-center gap-2">
                     {keuntungan > 0 ? (
                       <TrendingUp className="w-4 h-4 text-green-500" />
@@ -71,11 +57,8 @@ export default function Leaderboard({ summaries, settings }: Props) {
                     ) : (
                       <Minus className="w-4 h-4 text-slate-400" />
                     )}
-                    <span
-                      className={`font-bold text-sm ${keuntungan >= 0 ? "text-green-600" : "text-red-600"}`}
-                    >
-                      {keuntungan >= 0 ? "+" : ""}
-                      {formatRupiah(keuntungan)}
+                    <span className={`font-bold text-sm ${keuntungan >= 0 ? "text-green-600" : "text-red-600"}`}>
+                      {keuntungan >= 0 ? "+" : ""}{formatRupiah(keuntungan)}
                     </span>
                   </div>
                 </div>
@@ -90,25 +73,18 @@ export default function Leaderboard({ summaries, settings }: Props) {
                 <div className="flex justify-between text-xs text-slate-500">
                   <span>
                     Pengeluaran:{" "}
-                    <span className="font-semibold text-slate-700">
-                      {formatRupiah(summary.totalPengeluaran)}
-                    </span>
+                    <span className="font-semibold text-slate-700">{formatRupiah(summary.totalPengeluaran)}</span>
                   </span>
                   <span>
-                    Pendapatan:{" "}
-                    <span className="font-semibold text-green-700">
-                      {formatRupiah(summary.totalPendapatan)}
-                    </span>
+                    Anggaran:{" "}
+                    <span className="font-semibold text-green-700">{formatRupiah(summary.totalPendapatan)}</span>
                   </span>
                 </div>
 
                 <div className="mt-1 text-xs text-slate-400">
-                  {stagesCompleted}/{settings.paymentStages?.length ?? 0} tahap
-                  pembayaran lunas
+                  {stagesCompleted}/{settings.paymentStages?.length ?? 0} tahap pembayaran lunas
                   {" · "}
-                  <span className={`font-semibold ${status.color}`}>
-                    {status.label}
-                  </span>
+                  <span className={`font-semibold ${status.color}`}>{status.label}</span>
                 </div>
               </div>
             </div>

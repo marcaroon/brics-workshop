@@ -11,16 +11,19 @@ export function exportRekapCSV(
 
   rows.push([settings.namaWorkshop]);
   rows.push([
-    `Total Nilai Project: ${formatRupiah(settings.jumlahPendapatan)}`,
+    `Maksimal Pengeluaran: ${formatRupiah(settings.jumlahPendapatan)}`,
   ]);
-  rows.push([`Maks Pengeluaran: ${formatRupiah(settings.maxPengeluaran)}`]);
+  rows.push([`Total Nilai Project: ${formatRupiah(settings.maxPengeluaran)}`]);
   rows.push([]);
 
   summaries.forEach((summary) => {
     const keuntungan = summary.totalPendapatan - summary.totalPengeluaran;
 
     rows.push([`=== ${summary.team.namaTeam} ===`]);
-    rows.push(["Total Pendapatan", formatRupiah(summary.totalPendapatan)]);
+    rows.push([
+      "Total Pendapatan (Anggaran Diterima)",
+      formatRupiah(summary.totalPendapatan),
+    ]);
     rows.push(["Total Pengeluaran", formatRupiah(summary.totalPengeluaran)]);
     rows.push(["Keuntungan", formatRupiah(keuntungan)]);
     rows.push([]);
@@ -120,14 +123,14 @@ export function exportRekapCSV(
   ]);
   ranked.forEach((s, i) => {
     const k = s.totalPendapatan - s.totalPengeluaran;
-    const over = s.totalPengeluaran > settings.maxPengeluaran;
+    const over = s.totalPengeluaran > s.totalPendapatan;
     rows.push([
       String(i + 1),
       s.team.namaTeam,
       formatRupiah(s.totalPendapatan),
       formatRupiah(s.totalPengeluaran),
       formatRupiah(k),
-      over ? "MELEBIHI BATAS" : "AMAN",
+      over ? "MELEBIHI ANGGARAN" : "AMAN",
     ]);
   });
 
