@@ -13,8 +13,8 @@ import {
   orderBy,
   serverTimestamp,
 } from "./firebase";
-import { WorkshopSettings, Team, DailySubmission, MaterialItem } from "@/types";
-import { DEFAULT_MATERIALS, DEFAULT_SETTINGS, WORKSHOP_ID } from "./defaultData";
+import { WorkshopSettings, Team, DailySubmission, MaterialItem, TeamPaymentStatus } from "@/types";
+import { DEFAULT_MATERIALS, DEFAULT_PAYMENT_STAGES, DEFAULT_SETTINGS, WORKSHOP_ID } from "./defaultData";
 
 // ─── Workshop Settings ────────────────────────────────────────────────
 
@@ -37,6 +37,7 @@ export async function initializeWorkshop(): Promise<WorkshopSettings> {
   const settings: Omit<WorkshopSettings, "id"> = {
     ...DEFAULT_SETTINGS,
     materials,
+    paymentStages: DEFAULT_PAYMENT_STAGES,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -123,4 +124,49 @@ export async function checkDaySubmitted(teamId: string, hari: number): Promise<b
   );
   const snap = await getDocs(q);
   return !snap.empty;
+}
+
+// ─── Payment Statuses ─────────────────────────────────────────────────
+
+// Doc ID pattern: {workshopId}_{teamId}_{stageId}
+function paymentDocId(teamId: string, stageId: string) {
+  return `${WORKSHOP_ID}_${teamId}_${stageId}`;
+}
+
+export async function getAllPaymentStatuses(): Promise<TeamPaymentStatus[]> {
+  const q = query(
+    collection(db, "paymentStatuses"),
+    where("workshopId", "==", WORKSHOP_ID)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as TeamPaymentStatus);
+}
+
+export async function getTeamPaymentStatuses(teamId: string): Promise<TeamPaymentStatus[]> {
+  const q = query(
+    collection(db, "paymentStatuses"),
+    where("workshopId", "==", WORKSHOP_ID),
+    where("teamId", "==", teamId)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as TeamPaymentStatus);
+}
+
+export async function setPaymentStatus(
+  teamId: string,
+  stageId: string,
+  completed: boolean,
+  bonus: number,
+  penalty: number
+): Promise<void> {
+  const docId = paymentDocId(teamId, stageId);
+  await setDoc(doc(db, "paymentStatuses", docId), {
+    workshopId: WORKSHOP_ID,
+    teamId,
+    stageId,
+    completed,
+    bonus,
+    penalty,
+    completedAt: completed ? serverTimestamp() : null,
+  });
 }
