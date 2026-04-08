@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   getWorkshopSettings,
@@ -20,6 +20,7 @@ import {
   TeamSummary,
   TeamPaymentStatus,
   MaterialItem,
+  PackageOption,
   PaymentStage,
 } from "@/types";
 import { formatRupiah, getSpendingStatus } from "@/lib/utils";
@@ -51,6 +52,7 @@ import {
   Upload,
   CloudOff,
   RotateCcw,
+  Tag,
 } from "lucide-react";
 
 type Tab = "monitor" | "payments" | "leaderboard" | "teams" | "settings";
@@ -68,33 +70,21 @@ export default function AdminPage() {
   const [settings, setSettings] = useState<WorkshopSettings | null>(null);
   const [teams, setTeams] = useState<Team[]>([]);
   const [summaries, setSummaries] = useState<TeamSummary[]>([]);
-  const [allPaymentStatuses, setAllPaymentStatuses] = useState<
-    TeamPaymentStatus[]
-  >([]);
+  const [allPaymentStatuses, setAllPaymentStatuses] = useState<TeamPaymentStatus[]>([]);
   const [expandedTeam, setExpandedTeam] = useState<string | null>(null);
   const [newTeamName, setNewTeamName] = useState("");
   const [addingTeam, setAddingTeam] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsForm, setSettingsForm] = useState<Partial<WorkshopSettings>>(
-    {},
-  );
+  const [settingsForm, setSettingsForm] = useState<Partial<WorkshopSettings>>({});
   const [savingPayment, setSavingPayment] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [expandedPackageIdx, setExpandedPackageIdx] = useState<number | null>(null);
 
-  const [drag, setDrag] = useState<DragState>({
-    draggingIdx: null,
-    overIdx: null,
-  });
-
-  const [uploadState, setUploadState] = useState<
-    Record<number, "uploading" | "done" | "error">
-  >({});
+  const [drag, setDrag] = useState<DragState>({ draggingIdx: null, overIdx: null });
+  const [uploadState, setUploadState] = useState<Record<number, "uploading" | "done" | "error">>({});
 
   useEffect(() => {
-    if (!sessionStorage.getItem("isAdmin")) {
-      router.push("/");
-      return;
-    }
+    if (!sessionStorage.getItem("isAdmin")) { router.push("/"); return; }
     load();
   }, []);
 
@@ -107,10 +97,7 @@ export default function AdminPage() {
         getAllSubmissions(),
         getAllPaymentStatuses(),
       ]);
-      if (!ws) {
-        router.push("/");
-        return;
-      }
+      if (!ws) { router.push("/"); return; }
       setSettings(ws);
       setTeams(t);
       setAllPaymentStatuses(allPay);
@@ -123,7 +110,7 @@ export default function AdminPage() {
         cloudinaryCloudName: ws.cloudinaryCloudName ?? "",
         cloudinaryUploadPreset: ws.cloudinaryUploadPreset ?? "",
         materials: ws.materials
-          .map((m) => ({ ...m }))
+          .map((m) => ({ ...m, packages: m.packages ? [...m.packages.map((p) => ({ ...p }))] : [] }))
           .sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
         paymentStages: ws.paymentStages?.map((p) => ({ ...p })) ?? [],
       });
@@ -134,28 +121,15 @@ export default function AdminPage() {
     }
   }, [router]);
 
-  function buildSummaries(
-    t: Team[],
-    allSubs: DailySubmission[],
-    allPay: TeamPaymentStatus[],
-    ws: WorkshopSettings,
-  ): TeamSummary[] {
+  function buildSummaries(t: Team[], allSubs: DailySubmission[], allPay: TeamPaymentStatus[], ws: WorkshopSettings): TeamSummary[] {
     return t.map((team) => {
       const teamSubs = allSubs.filter((s) => s.teamId === team.id);
-      const totalPengeluaran = teamSubs.reduce(
-        (s, sub) => s + sub.totalHari,
-        0,
-      );
+      const totalPengeluaran = teamSubs.reduce((s, sub) => s + sub.totalHari, 0);
       const totalPerMaterial: TeamSummary["totalPerMaterial"] = {};
       teamSubs.forEach((sub) => {
         sub.entries.forEach((e) => {
           if (!totalPerMaterial[e.materialId]) {
-            totalPerMaterial[e.materialId] = {
-              jumlah: 0,
-              total: 0,
-              nama: e.namaKomponen,
-              satuan: e.satuan,
-            };
+            totalPerMaterial[e.materialId] = { jumlah: 0, total: 0, nama: e.namaKomponen, satuan: e.satuan };
           }
           totalPerMaterial[e.materialId].jumlah += e.jumlah;
           totalPerMaterial[e.materialId].total += e.totalHarga;
@@ -169,32 +143,16 @@ export default function AdminPage() {
         const penaltyAmt = (ps.penalty ?? 0) * BONUS_PENALTY_VALUE;
         return sum + stage.nominal + bonusAmt - penaltyAmt;
       }, 0);
-      return {
-        team,
-        submissions: teamSubs,
-        totalPengeluaran,
-        totalPendapatan,
-        totalPerMaterial,
-        paymentStatuses: teamPayments,
-      };
+      return { team, submissions: teamSubs, totalPengeluaran, totalPendapatan, totalPerMaterial, paymentStatuses: teamPayments };
     });
   }
 
-  // ─── Reset handler ────────────────────────────────────────────────
+  // ─── Reset ────────────────────────────────────────────────────────
 
   async function handleResetSubmissions() {
     const totalSubs = summaries.reduce((s, t) => s + t.submissions.length, 0);
-    const confirmed = confirm(
-      `Reset data transaksi?\n\nIni akan menghapus:\n• ${totalSubs} submission dari semua tim\n• Semua status pembayaran\n\nPengaturan workshop, daftar tim, dan material TIDAK akan berubah.\n\nLanjutkan?`,
-    );
-    if (!confirmed) return;
-
-    // Second confirmation — destructive action
-    const reconfirmed = confirm(
-      "Yakin? Data yang dihapus tidak bisa dipulihkan.",
-    );
-    if (!reconfirmed) return;
-
+    if (!confirm(`Reset data transaksi?\n\nIni akan menghapus:\n• ${totalSubs} submission dari semua tim\n• Semua status pembayaran\n\nPengaturan workshop, daftar tim, dan material TIDAK akan berubah.\n\nLanjutkan?`)) return;
+    if (!confirm("Yakin? Data yang dihapus tidak bisa dipulihkan.")) return;
     setResetting(true);
     try {
       await resetAllSubmissions();
@@ -210,13 +168,7 @@ export default function AdminPage() {
 
   // ─── Payment handlers ─────────────────────────────────────────────
 
-  async function handleTogglePayment(
-    teamId: string,
-    stageId: string,
-    currentCompleted: boolean,
-    bonus: number,
-    penalty: number,
-  ) {
+  async function handleTogglePayment(teamId: string, stageId: string, currentCompleted: boolean, bonus: number, penalty: number) {
     const key = `${teamId}_${stageId}`;
     setSavingPayment(key);
     await setPaymentStatus(teamId, stageId, !currentCompleted, bonus, penalty);
@@ -224,13 +176,7 @@ export default function AdminPage() {
     setSavingPayment(null);
   }
 
-  async function handleUpdateBonusPenalty(
-    teamId: string,
-    stageId: string,
-    completed: boolean,
-    bonus: number,
-    penalty: number,
-  ) {
+  async function handleUpdateBonusPenalty(teamId: string, stageId: string, completed: boolean, bonus: number, penalty: number) {
     const key = `${teamId}_${stageId}`;
     setSavingPayment(key);
     await setPaymentStatus(teamId, stageId, completed, bonus, penalty);
@@ -261,10 +207,7 @@ export default function AdminPage() {
   async function handleSaveSettings(e: React.FormEvent) {
     e.preventDefault();
     setSavingSettings(true);
-    const materials = settingsForm.materials?.map((m, i) => ({
-      ...m,
-      order: i,
-    }));
+    const materials = settingsForm.materials?.map((m, i) => ({ ...m, order: i }));
     await updateWorkshopSettings({
       namaWorkshop: settingsForm.namaWorkshop,
       jumlahHari: Number(settingsForm.jumlahHari),
@@ -285,20 +228,68 @@ export default function AdminPage() {
     setSettingsForm((prev) => ({
       ...prev,
       materials: prev.materials?.map((m, i) =>
-        i === idx
-          ? { ...m, [field]: field === "hargaPerPcs" ? Number(val) : val }
-          : m,
+        i === idx ? { ...m, [field]: field === "hargaPerPcs" ? Number(val) : val } : m
       ),
     }));
   }
+
+  function updateMaterialDirect(idx: number, field: keyof MaterialItem, val: string | number) {
+    setSettingsForm((prev) => ({
+      ...prev,
+      materials: prev.materials?.map((m, i) => (i === idx ? { ...m, [field]: val } : m)),
+    }));
+  }
+
+  // ─── Package management ───────────────────────────────────────────
+
+  function addPackage(matIdx: number) {
+    setSettingsForm((prev) => {
+      const mats = [...(prev.materials ?? [])];
+      const mat = { ...mats[matIdx] };
+      const pkgs = [...(mat.packages ?? [])];
+      const newId = `pkg-${mat.id}-${Date.now()}`;
+      pkgs.push({ id: newId, label: "", qtyPerPackage: 1, hargaPerPackage: 0 });
+      mat.packages = pkgs;
+      mats[matIdx] = mat;
+      return { ...prev, materials: mats };
+    });
+  }
+
+  function updatePackage(matIdx: number, pkgIdx: number, field: keyof PackageOption, val: string) {
+    setSettingsForm((prev) => {
+      const mats = [...(prev.materials ?? [])];
+      const mat = { ...mats[matIdx] };
+      const pkgs = [...(mat.packages ?? [])];
+      const pkg = { ...pkgs[pkgIdx] };
+      if (field === "qtyPerPackage" || field === "hargaPerPackage") {
+        (pkg as Record<string, unknown>)[field] = Number(val);
+      } else {
+        (pkg as Record<string, unknown>)[field] = val;
+      }
+      pkgs[pkgIdx] = pkg;
+      mat.packages = pkgs;
+      mats[matIdx] = mat;
+      return { ...prev, materials: mats };
+    });
+  }
+
+  function removePackage(matIdx: number, pkgIdx: number) {
+    setSettingsForm((prev) => {
+      const mats = [...(prev.materials ?? [])];
+      const mat = { ...mats[matIdx] };
+      mat.packages = (mat.packages ?? []).filter((_, i) => i !== pkgIdx);
+      mats[matIdx] = mat;
+      return { ...prev, materials: mats };
+    });
+  }
+
+  // ─── Stage handlers ───────────────────────────────────────────────
 
   function updateStage(idx: number, field: string, val: string) {
     setSettingsForm((prev) => ({
       ...prev,
       paymentStages: prev.paymentStages?.map((s, i) =>
-        i === idx
-          ? { ...s, [field]: field === "nominal" ? Number(val) : val }
-          : s,
+        i === idx ? { ...s, [field]: field === "nominal" ? Number(val) : val } : s
       ),
     }));
   }
@@ -308,10 +299,7 @@ export default function AdminPage() {
     const newId = `stage-${Date.now()}`;
     setSettingsForm((prev) => ({
       ...prev,
-      paymentStages: [
-        ...stages,
-        { id: newId, label: `Tahap ${stages.length}`, nominal: 0 },
-      ],
+      paymentStages: [...stages, { id: newId, label: `Tahap ${stages.length}`, nominal: 0 }],
     }));
   }
 
@@ -324,14 +312,8 @@ export default function AdminPage() {
 
   // ─── Drag-to-reorder ──────────────────────────────────────────────
 
-  function handleDragStart(idx: number) {
-    setDrag({ draggingIdx: idx, overIdx: idx });
-  }
-
-  function handleDragEnter(idx: number) {
-    setDrag((d) => ({ ...d, overIdx: idx }));
-  }
-
+  function handleDragStart(idx: number) { setDrag({ draggingIdx: idx, overIdx: idx }); }
+  function handleDragEnter(idx: number) { setDrag((d) => ({ ...d, overIdx: idx })); }
   function handleDragEnd() {
     const { draggingIdx, overIdx } = drag;
     if (draggingIdx === null || overIdx === null || draggingIdx === overIdx) {
@@ -347,15 +329,13 @@ export default function AdminPage() {
     setDrag({ draggingIdx: null, overIdx: null });
   }
 
-  // ─── Cloudinary image upload ──────────────────────────────────────
+  // ─── Cloudinary upload ────────────────────────────────────────────
 
   async function handleImageUpload(idx: number, file: File) {
     const cloudName = settingsForm.cloudinaryCloudName ?? "";
     const preset = settingsForm.cloudinaryUploadPreset ?? "";
     if (!cloudName || !preset) {
-      alert(
-        "Isi Cloud Name dan Upload Preset Cloudinary di bagian Konfigurasi Cloudinary terlebih dahulu.",
-      );
+      alert("Isi Cloud Name dan Upload Preset Cloudinary di bagian Konfigurasi Cloudinary terlebih dahulu.");
       return;
     }
     setUploadState((s) => ({ ...s, [idx]: "uploading" }));
@@ -370,22 +350,7 @@ export default function AdminPage() {
     }
   }
 
-  function updateMaterialDirect(
-    idx: number,
-    field: keyof MaterialItem,
-    val: string | number,
-  ) {
-    setSettingsForm((prev) => ({
-      ...prev,
-      materials: prev.materials?.map((m, i) =>
-        i === idx ? { ...m, [field]: val } : m,
-      ),
-    }));
-  }
-
-  function removeMaterialImage(idx: number) {
-    updateMaterialDirect(idx, "imageUrl", "");
-  }
+  function removeMaterialImage(idx: number) { updateMaterialDirect(idx, "imageUrl", ""); }
 
   // ─── Render ───────────────────────────────────────────────────────
 
@@ -408,10 +373,7 @@ export default function AdminPage() {
     { key: "settings", label: "Pengaturan", icon: Settings },
   ];
 
-  const totalSubmissions = summaries.reduce(
-    (s, t) => s + t.submissions.length,
-    0,
-  );
+  const totalSubmissions = summaries.reduce((s, t) => s + t.submissions.length, 0);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -420,35 +382,18 @@ export default function AdminPage() {
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div>
             <p className="text-xs text-blue-300">Panel Penyelenggara</p>
-            <h1 className="font-bold text-xl leading-tight">
-              {settings?.namaWorkshop}
-            </h1>
+            <h1 className="font-bold text-xl leading-tight">{settings?.namaWorkshop}</h1>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={load}
-              disabled={refreshing}
-              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-            >
-              <RefreshCw
-                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
-              />
+            <button onClick={load} disabled={refreshing} className="p-2 hover:bg-white/10 rounded-lg transition-colors">
+              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
             </button>
             {settings && summaries.length > 0 && (
-              <button
-                onClick={() => exportRekapCSV(summaries, settings)}
-                className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 transition-colors"
-              >
+              <button onClick={() => exportRekapCSV(summaries, settings)} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 transition-colors">
                 <Download className="w-4 h-4" /> Export CSV
               </button>
             )}
-            <button
-              onClick={() => {
-                sessionStorage.removeItem("isAdmin");
-                router.push("/");
-              }}
-              className="flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors"
-            >
+            <button onClick={() => { sessionStorage.removeItem("isAdmin"); router.push("/"); }} className="flex items-center gap-1 text-sm px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors">
               <LogOut className="w-4 h-4" /> Keluar
             </button>
           </div>
@@ -459,15 +404,7 @@ export default function AdminPage() {
       <div className="bg-white border-b border-slate-200 sticky top-0 z-10 shadow-sm">
         <div className="max-w-5xl mx-auto px-4 flex overflow-x-auto">
           {TABS.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${
-                tab === key
-                  ? "border-blue-600 text-blue-700"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
-            >
+            <button key={key} onClick={() => setTab(key)} className={`flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 whitespace-nowrap transition-colors ${tab === key ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
               <Icon className="w-4 h-4" /> {label}
             </button>
           ))}
@@ -475,42 +412,19 @@ export default function AdminPage() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 py-6">
-        {/* ═══════════════════════════════════════════════════════
-            TAB: MONITORING
-        ═══════════════════════════════════════════════════════ */}
+
+        {/* ═══ MONITORING ═══ */}
         {tab === "monitor" && (
           <div className="space-y-5">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[
-                {
-                  label: "Total Tim",
-                  value: String(teams.length),
-                  sub: "tim aktif",
-                  color: "text-blue-700",
-                },
-                {
-                  label: "Total Hari",
-                  value: String(settings?.jumlahHari),
-                  sub: "hari workshop",
-                  color: "text-slate-700",
-                },
-                {
-                  label: "Maksimal Pengeluaran",
-                  value: formatRupiah(settings?.jumlahPendapatan ?? 0),
-                  sub: "per tim",
-                  color: "text-green-700",
-                },
-                {
-                  label: "Nilai Project",
-                  value: formatRupiah(settings?.maxPengeluaran ?? 0),
-                  sub: "total",
-                  color: "text-orange-600",
-                },
+                { label: "Total Tim", value: String(teams.length), sub: "tim aktif", color: "text-blue-700" },
+                { label: "Total Hari", value: String(settings?.jumlahHari), sub: "hari workshop", color: "text-slate-700" },
+                { label: "Maksimal Pengeluaran", value: formatRupiah(settings?.jumlahPendapatan ?? 0), sub: "per tim", color: "text-green-700" },
+                { label: "Nilai Project", value: formatRupiah(settings?.maxPengeluaran ?? 0), sub: "total", color: "text-orange-600" },
               ].map(({ label, value, sub, color }) => (
                 <div key={label} className="card text-center">
-                  <p className={`text-lg font-bold ${color} leading-tight`}>
-                    {value}
-                  </p>
+                  <p className={`text-lg font-bold ${color} leading-tight`}>{value}</p>
                   <p className="text-xs text-slate-500 mt-0.5">{label}</p>
                   <p className="text-xs text-slate-400">{sub}</p>
                 </div>
@@ -524,83 +438,36 @@ export default function AdminPage() {
               </div>
             ) : (
               summaries.map((summary, teamIdx) => {
-                const {
-                  team,
-                  submissions,
-                  totalPengeluaran,
-                  totalPendapatan,
-                  totalPerMaterial,
-                } = summary;
-                const status = getSpendingStatus(
-                  totalPengeluaran,
-                  totalPendapatan,
-                );
+                const { team, submissions, totalPengeluaran, totalPendapatan, totalPerMaterial } = summary;
+                const status = getSpendingStatus(totalPengeluaran, totalPendapatan);
                 const isExpanded = expandedTeam === team.id;
-                const pct =
-                  totalPendapatan > 0
-                    ? (totalPengeluaran / totalPendapatan) * 100
-                    : 0;
+                const pct = totalPendapatan > 0 ? (totalPengeluaran / totalPendapatan) * 100 : 0;
                 const keuntungan = totalPendapatan - totalPengeluaran;
-                const stagesCompleted = summary.paymentStatuses.filter(
-                  (p) => p.completed,
-                ).length;
+                const stagesCompleted = summary.paymentStatuses.filter((p) => p.completed).length;
                 const totalStages = settings?.paymentStages?.length ?? 0;
 
                 return (
                   <div key={team.id} className="card">
-                    <button
-                      onClick={() =>
-                        setExpandedTeam(isExpanded ? null : team.id)
-                      }
-                      className="w-full"
-                    >
+                    <button onClick={() => setExpandedTeam(isExpanded ? null : team.id)} className="w-full">
                       <div className="flex items-center gap-3 mb-3">
-                        <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-700 font-bold text-lg flex items-center justify-center flex-shrink-0">
-                          {teamIdx + 1}
-                        </div>
+                        <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-700 font-bold text-lg flex items-center justify-center flex-shrink-0">{teamIdx + 1}</div>
                         <div className="flex-1 text-left">
                           <div className="flex items-center justify-between">
-                            <p className="font-bold text-slate-800">
-                              {team.namaTeam}
-                            </p>
+                            <p className="font-bold text-slate-800">{team.namaTeam}</p>
                             <div className="flex items-center gap-2">
-                              <span
-                                className={`text-xs font-semibold px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}
-                              >
-                                {status.label}
-                              </span>
-                              {isExpanded ? (
-                                <ChevronUp className="w-4 h-4 text-slate-400" />
-                              ) : (
-                                <ChevronDown className="w-4 h-4 text-slate-400" />
-                              )}
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}>{status.label}</span>
+                              {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
                             </div>
                           </div>
-                          <p className="text-xs text-slate-500">
-                            {submissions.length} submisi · {stagesCompleted}/
-                            {totalStages} tahap lunas
-                          </p>
+                          <p className="text-xs text-slate-500">{submissions.length} submisi · {stagesCompleted}/{totalStages} tahap lunas</p>
                         </div>
                       </div>
                       <div className="w-full bg-slate-200 rounded-full h-2.5">
-                        <div
-                          className={`${status.barColor} h-2.5 rounded-full`}
-                          style={{ width: `${Math.min(pct, 100)}%` }}
-                        />
+                        <div className={`${status.barColor} h-2.5 rounded-full`} style={{ width: `${Math.min(pct, 100)}%` }} />
                       </div>
                       <div className="flex justify-between text-xs text-slate-400 mt-1">
-                        <span>
-                          Pengeluaran:{" "}
-                          <span className="font-semibold text-slate-600">
-                            {formatRupiah(totalPengeluaran)}
-                          </span>
-                        </span>
-                        <span>
-                          Anggaran diterima:{" "}
-                          <span className="font-semibold text-green-600">
-                            {formatRupiah(totalPendapatan)}
-                          </span>
-                        </span>
+                        <span>Pengeluaran: <span className="font-semibold text-slate-600">{formatRupiah(totalPengeluaran)}</span></span>
+                        <span>Anggaran diterima: <span className="font-semibold text-green-600">{formatRupiah(totalPendapatan)}</span></span>
                       </div>
                     </button>
 
@@ -608,81 +475,49 @@ export default function AdminPage() {
                       <div className="mt-5 pt-5 border-t border-slate-100 space-y-5">
                         <div className="grid grid-cols-3 gap-3">
                           <div className="bg-green-50 rounded-xl p-3 text-center">
-                            <p className="text-xs text-slate-500 mb-1">
-                              Pendapatan / Anggaran
-                            </p>
-                            <p className="font-bold text-sm text-green-700">
-                              {formatRupiah(totalPendapatan)}
-                            </p>
+                            <p className="text-xs text-slate-500 mb-1">Pendapatan / Anggaran</p>
+                            <p className="font-bold text-sm text-green-700">{formatRupiah(totalPendapatan)}</p>
                           </div>
                           <div className="bg-slate-50 rounded-xl p-3 text-center">
-                            <p className="text-xs text-slate-500 mb-1">
-                              Pengeluaran
-                            </p>
-                            <p className="font-bold text-sm text-slate-700">
-                              {formatRupiah(totalPengeluaran)}
-                            </p>
+                            <p className="text-xs text-slate-500 mb-1">Pengeluaran</p>
+                            <p className="font-bold text-sm text-slate-700">{formatRupiah(totalPengeluaran)}</p>
                           </div>
-                          <div
-                            className={`rounded-xl p-3 text-center ${keuntungan >= 0 ? "bg-green-50" : "bg-red-50"}`}
-                          >
-                            <p className="text-xs text-slate-500 mb-1">
-                              Keuntungan
-                            </p>
-                            <p
-                              className={`font-bold text-sm ${keuntungan >= 0 ? "text-green-700" : "text-red-700"}`}
-                            >
-                              {keuntungan >= 0 ? "+" : ""}
-                              {formatRupiah(keuntungan)}
-                            </p>
+                          <div className={`rounded-xl p-3 text-center ${keuntungan >= 0 ? "bg-green-50" : "bg-red-50"}`}>
+                            <p className="text-xs text-slate-500 mb-1">Keuntungan</p>
+                            <p className={`font-bold text-sm ${keuntungan >= 0 ? "text-green-700" : "text-red-700"}`}>{keuntungan >= 0 ? "+" : ""}{formatRupiah(keuntungan)}</p>
                           </div>
                         </div>
 
                         <div>
                           <p className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                            <Lock className="w-4 h-4 text-slate-400" /> Riwayat
-                            Pembelian
+                            <Lock className="w-4 h-4 text-slate-400" /> Riwayat Pembelian
                           </p>
                           {submissions.length === 0 ? (
-                            <p className="text-sm text-slate-400 italic">
-                              Belum ada submission
-                            </p>
+                            <p className="text-sm text-slate-400 italic">Belum ada submission</p>
                           ) : (
                             <div className="space-y-2">
                               {submissions.map((sub) => (
-                                <div
-                                  key={sub.id}
-                                  className="bg-slate-50 rounded-xl p-3"
-                                >
+                                <div key={sub.id} className="bg-slate-50 rounded-xl p-3">
                                   <div className="flex justify-between items-center mb-2">
                                     <span className="font-semibold text-sm text-slate-700 flex items-center gap-1.5">
-                                      <Lock className="w-3.5 h-3.5 text-slate-400" />{" "}
-                                      Hari ke-{sub.hari}
+                                      <Lock className="w-3.5 h-3.5 text-slate-400" /> Hari ke-{sub.hari}
                                     </span>
-                                    <span className="font-bold text-blue-700 text-sm">
-                                      {formatRupiah(sub.totalHari)}
-                                    </span>
+                                    <span className="font-bold text-blue-700 text-sm">{formatRupiah(sub.totalHari)}</span>
                                   </div>
                                   {sub.entries.length === 0 ? (
-                                    <p className="text-xs text-slate-400 italic">
-                                      Tidak ada pembelian
-                                    </p>
+                                    <p className="text-xs text-slate-400 italic">Tidak ada pembelian</p>
                                   ) : (
                                     <div className="space-y-1">
                                       {sub.entries.map((e, i) => (
-                                        <div
-                                          key={i}
-                                          className="flex justify-between text-xs"
-                                        >
+                                        <div key={i} className="flex justify-between text-xs">
                                           <span className="text-slate-600">
-                                            {e.namaKomponen}{" "}
-                                            <span className="text-slate-400">
-                                              × {e.jumlah} {e.satuan}
-                                            </span>
+                                            {e.namaKomponen}
+                                            {e.isPackage && (
+                                              <span className="ml-1 text-blue-500 font-medium">[{e.packageLabel}×{e.packageCount}]</span>
+                                            )}
+                                            <span className="text-slate-400"> × {e.jumlah} {e.satuan}</span>
                                           </span>
-                                          <span className="text-slate-700 font-medium">
-                                            {formatRupiah(e.totalHarga)}
-                                          </span>
+                                          <span className="text-slate-700 font-medium">{formatRupiah(e.totalHarga)}</span>
                                         </div>
                                       ))}
                                     </div>
@@ -696,53 +531,30 @@ export default function AdminPage() {
                         {Object.keys(totalPerMaterial).length > 0 && (
                           <div>
                             <p className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
-                              <Package className="w-4 h-4 text-slate-400" />{" "}
-                              Rekapan Total Material & SDM
+                              <Package className="w-4 h-4 text-slate-400" /> Rekapan Total Material & SDM
                             </p>
                             <div className="overflow-x-auto rounded-xl border border-slate-200">
                               <table className="w-full text-xs">
                                 <thead className="bg-slate-50">
                                   <tr className="text-left text-slate-500">
                                     <th className="px-3 py-2">Komponen</th>
-                                    <th className="px-3 py-2 text-right">
-                                      Total Qty
-                                    </th>
-                                    <th className="px-3 py-2 text-right">
-                                      Total Biaya
-                                    </th>
+                                    <th className="px-3 py-2 text-right">Total Qty</th>
+                                    <th className="px-3 py-2 text-right">Total Biaya</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {Object.values(totalPerMaterial).map(
-                                    (m, i) => (
-                                      <tr
-                                        key={i}
-                                        className="border-t border-slate-100"
-                                      >
-                                        <td className="px-3 py-2 text-slate-700">
-                                          {m.nama}
-                                        </td>
-                                        <td className="px-3 py-2 text-right text-slate-600">
-                                          {m.jumlah} {m.satuan}
-                                        </td>
-                                        <td className="px-3 py-2 text-right font-semibold text-slate-700">
-                                          {formatRupiah(m.total)}
-                                        </td>
-                                      </tr>
-                                    ),
-                                  )}
+                                  {Object.values(totalPerMaterial).map((m, i) => (
+                                    <tr key={i} className="border-t border-slate-100">
+                                      <td className="px-3 py-2 text-slate-700">{m.nama}</td>
+                                      <td className="px-3 py-2 text-right text-slate-600">{m.jumlah} {m.satuan}</td>
+                                      <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatRupiah(m.total)}</td>
+                                    </tr>
+                                  ))}
                                 </tbody>
                                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                                   <tr>
-                                    <td
-                                      className="px-3 py-2 font-bold text-slate-700"
-                                      colSpan={2}
-                                    >
-                                      TOTAL
-                                    </td>
-                                    <td className="px-3 py-2 text-right font-bold text-blue-700">
-                                      {formatRupiah(totalPengeluaran)}
-                                    </td>
+                                    <td className="px-3 py-2 font-bold text-slate-700" colSpan={2}>TOTAL</td>
+                                    <td className="px-3 py-2 text-right font-bold text-blue-700">{formatRupiah(totalPengeluaran)}</td>
                                   </tr>
                                 </tfoot>
                               </table>
@@ -758,76 +570,44 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ═══════════════════════════════════════════════════════
-            TAB: PEMBAYARAN
-        ═══════════════════════════════════════════════════════ */}
+        {/* ═══ PEMBAYARAN ═══ */}
         {tab === "payments" && (
           <div className="space-y-4">
             <div className="card bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200">
               <div className="flex items-center gap-3">
                 <CreditCard className="w-7 h-7 text-blue-600" />
                 <div>
-                  <h2 className="font-bold text-slate-800">
-                    Manajemen Pembayaran
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Centang tahap setelah tim konfirmasi pembayaran.
-                    Bonus/penalti masing-masing{" "}
-                    {formatRupiah(BONUS_PENALTY_VALUE)}. Anggaran belanja tim =
-                    total pembayaran yang sudah diterima.
-                  </p>
+                  <h2 className="font-bold text-slate-800">Manajemen Pembayaran</h2>
+                  <p className="text-xs text-slate-500">Centang tahap setelah tim konfirmasi pembayaran. Bonus/penalti masing-masing {formatRupiah(BONUS_PENALTY_VALUE)}. Anggaran belanja tim = total pembayaran yang sudah diterima.</p>
                 </div>
               </div>
             </div>
 
             {summaries.length === 0 ? (
               <div className="card text-center py-12 text-slate-400">
-                <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                <p>Belum ada tim.</p>
+                <Users className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>Belum ada tim.</p>
               </div>
             ) : (
               summaries.map((summary) => {
                 const stages = settings?.paymentStages ?? [];
-                const totalBonus = summary.paymentStatuses.reduce(
-                  (s, p) => s + (p.bonus ?? 0) * BONUS_PENALTY_VALUE,
-                  0,
-                );
-                const totalPenalty = summary.paymentStatuses.reduce(
-                  (s, p) => s + (p.penalty ?? 0) * BONUS_PENALTY_VALUE,
-                  0,
-                );
+                const totalBonus = summary.paymentStatuses.reduce((s, p) => s + (p.bonus ?? 0) * BONUS_PENALTY_VALUE, 0);
+                const totalPenalty = summary.paymentStatuses.reduce((s, p) => s + (p.penalty ?? 0) * BONUS_PENALTY_VALUE, 0);
 
                 return (
                   <div key={summary.team.id} className="card">
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="font-bold text-slate-800 text-lg">
-                        {summary.team.namaTeam}
-                      </h3>
+                      <h3 className="font-bold text-slate-800 text-lg">{summary.team.namaTeam}</h3>
                       <div className="text-right">
-                        <p className="text-xs text-slate-500">
-                          Anggaran Diterima
-                        </p>
-                        <p className="font-bold text-green-700">
-                          {formatRupiah(summary.totalPendapatan)}
-                        </p>
+                        <p className="text-xs text-slate-500">Anggaran Diterima</p>
+                        <p className="font-bold text-green-700">{formatRupiah(summary.totalPendapatan)}</p>
                       </div>
                     </div>
-
                     {(totalBonus > 0 || totalPenalty > 0) && (
                       <div className="flex gap-3 mb-4">
-                        {totalBonus > 0 && (
-                          <div className="flex items-center gap-1.5 text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-full font-semibold">
-                            <span>+{formatRupiah(totalBonus)} bonus</span>
-                          </div>
-                        )}
-                        {totalPenalty > 0 && (
-                          <div className="flex items-center gap-1.5 text-xs bg-red-50 text-red-700 px-3 py-1.5 rounded-full font-semibold">
-                            <span>-{formatRupiah(totalPenalty)} penalti</span>
-                          </div>
-                        )}
+                        {totalBonus > 0 && <div className="flex items-center gap-1.5 text-xs bg-green-50 text-green-700 px-3 py-1.5 rounded-full font-semibold"><span>+{formatRupiah(totalBonus)} bonus</span></div>}
+                        {totalPenalty > 0 && <div className="flex items-center gap-1.5 text-xs bg-red-50 text-red-700 px-3 py-1.5 rounded-full font-semibold"><span>-{formatRupiah(totalPenalty)} penalti</span></div>}
                       </div>
                     )}
-
                     <div className="overflow-x-auto rounded-xl border border-slate-200">
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50">
@@ -841,9 +621,7 @@ export default function AdminPage() {
                         </thead>
                         <tbody>
                           {stages.map((stage) => {
-                            const ps = summary.paymentStatuses.find(
-                              (p) => p.stageId === stage.id,
-                            );
+                            const ps = summary.paymentStatuses.find((p) => p.stageId === stage.id);
                             const completed = ps?.completed ?? false;
                             const bonus = ps?.bonus ?? 0;
                             const penalty = ps?.penalty ?? 0;
@@ -851,123 +629,26 @@ export default function AdminPage() {
                             const isSaving = savingPayment === key;
 
                             return (
-                              <tr
-                                key={stage.id}
-                                className={`border-t border-slate-100 ${completed ? "bg-green-50/50" : ""}`}
-                              >
-                                <td className="px-3 py-2.5">
-                                  <span
-                                    className={`font-medium ${completed ? "text-green-700" : "text-slate-700"}`}
-                                  >
-                                    {stage.label}
-                                  </span>
-                                </td>
-                                <td className="px-3 py-2.5 text-right text-slate-600 font-medium">
-                                  {formatRupiah(stage.nominal)}
-                                </td>
+                              <tr key={stage.id} className={`border-t border-slate-100 ${completed ? "bg-green-50/50" : ""}`}>
+                                <td className="px-3 py-2.5"><span className={`font-medium ${completed ? "text-green-700" : "text-slate-700"}`}>{stage.label}</span></td>
+                                <td className="px-3 py-2.5 text-right text-slate-600 font-medium">{formatRupiah(stage.nominal)}</td>
                                 <td className="px-3 py-2.5 text-center">
-                                  <button
-                                    onClick={() =>
-                                      handleTogglePayment(
-                                        summary.team.id,
-                                        stage.id,
-                                        completed,
-                                        bonus,
-                                        penalty,
-                                      )
-                                    }
-                                    disabled={isSaving}
-                                    className={`inline-flex items-center justify-center w-8 h-8 rounded-lg transition-all ${
-                                      completed
-                                        ? "bg-green-100 text-green-600 hover:bg-green-200"
-                                        : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                                    } ${isSaving ? "opacity-50" : ""}`}
-                                  >
-                                    {isSaving ? (
-                                      <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : completed ? (
-                                      <CheckCircle className="w-4 h-4" />
-                                    ) : (
-                                      <Circle className="w-4 h-4" />
-                                    )}
+                                  <button onClick={() => handleTogglePayment(summary.team.id, stage.id, completed, bonus, penalty)} disabled={isSaving} className={`inline-flex items-center justify-center w-8 h-8 rounded-lg transition-all ${completed ? "bg-green-100 text-green-600 hover:bg-green-200" : "bg-slate-100 text-slate-400 hover:bg-slate-200"} ${isSaving ? "opacity-50" : ""}`}>
+                                    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : completed ? <CheckCircle className="w-4 h-4" /> : <Circle className="w-4 h-4" />}
                                   </button>
                                 </td>
                                 <td className="px-3 py-2.5 text-center">
                                   <div className="flex items-center justify-center gap-1">
-                                    <button
-                                      onClick={() =>
-                                        handleUpdateBonusPenalty(
-                                          summary.team.id,
-                                          stage.id,
-                                          completed,
-                                          Math.max(0, bonus - 1),
-                                          penalty,
-                                        )
-                                      }
-                                      disabled={bonus === 0 || isSaving}
-                                      className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center disabled:opacity-30 text-xs font-bold"
-                                    >
-                                      −
-                                    </button>
-                                    <span
-                                      className={`w-5 text-center text-xs font-bold ${bonus > 0 ? "text-green-600" : "text-slate-400"}`}
-                                    >
-                                      {bonus > 0 ? `+${bonus}` : "0"}
-                                    </span>
-                                    <button
-                                      onClick={() =>
-                                        handleUpdateBonusPenalty(
-                                          summary.team.id,
-                                          stage.id,
-                                          completed,
-                                          bonus + 1,
-                                          penalty,
-                                        )
-                                      }
-                                      disabled={isSaving}
-                                      className="w-6 h-6 rounded bg-green-100 hover:bg-green-200 text-green-700 flex items-center justify-center text-xs font-bold"
-                                    >
-                                      +
-                                    </button>
+                                    <button onClick={() => handleUpdateBonusPenalty(summary.team.id, stage.id, completed, Math.max(0, bonus - 1), penalty)} disabled={bonus === 0 || isSaving} className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center disabled:opacity-30 text-xs font-bold">−</button>
+                                    <span className={`w-5 text-center text-xs font-bold ${bonus > 0 ? "text-green-600" : "text-slate-400"}`}>{bonus > 0 ? `+${bonus}` : "0"}</span>
+                                    <button onClick={() => handleUpdateBonusPenalty(summary.team.id, stage.id, completed, bonus + 1, penalty)} disabled={isSaving} className="w-6 h-6 rounded bg-green-100 hover:bg-green-200 text-green-700 flex items-center justify-center text-xs font-bold">+</button>
                                   </div>
                                 </td>
                                 <td className="px-3 py-2.5 text-center">
                                   <div className="flex items-center justify-center gap-1">
-                                    <button
-                                      onClick={() =>
-                                        handleUpdateBonusPenalty(
-                                          summary.team.id,
-                                          stage.id,
-                                          completed,
-                                          bonus,
-                                          Math.max(0, penalty - 1),
-                                        )
-                                      }
-                                      disabled={penalty === 0 || isSaving}
-                                      className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center disabled:opacity-30 text-xs font-bold"
-                                    >
-                                      −
-                                    </button>
-                                    <span
-                                      className={`w-5 text-center text-xs font-bold ${penalty > 0 ? "text-red-600" : "text-slate-400"}`}
-                                    >
-                                      {penalty > 0 ? `-${penalty}` : "0"}
-                                    </span>
-                                    <button
-                                      onClick={() =>
-                                        handleUpdateBonusPenalty(
-                                          summary.team.id,
-                                          stage.id,
-                                          completed,
-                                          bonus,
-                                          penalty + 1,
-                                        )
-                                      }
-                                      disabled={isSaving}
-                                      className="w-6 h-6 rounded bg-red-100 hover:bg-red-200 text-red-700 flex items-center justify-center text-xs font-bold"
-                                    >
-                                      +
-                                    </button>
+                                    <button onClick={() => handleUpdateBonusPenalty(summary.team.id, stage.id, completed, bonus, Math.max(0, penalty - 1))} disabled={penalty === 0 || isSaving} className="w-6 h-6 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center disabled:opacity-30 text-xs font-bold">−</button>
+                                    <span className={`w-5 text-center text-xs font-bold ${penalty > 0 ? "text-red-600" : "text-slate-400"}`}>{penalty > 0 ? `-${penalty}` : "0"}</span>
+                                    <button onClick={() => handleUpdateBonusPenalty(summary.team.id, stage.id, completed, bonus, penalty + 1)} disabled={isSaving} className="w-6 h-6 rounded bg-red-100 hover:bg-red-200 text-red-700 flex items-center justify-center text-xs font-bold">+</button>
                                   </div>
                                 </td>
                               </tr>
@@ -976,28 +657,10 @@ export default function AdminPage() {
                         </tbody>
                         <tfoot className="border-t-2 border-slate-200 bg-slate-50">
                           <tr>
-                            <td className="px-3 py-2.5 font-bold text-slate-700">
-                              TOTAL ANGGARAN
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-bold text-slate-600">
-                              {formatRupiah(
-                                stages.reduce((s, st) => s + st.nominal, 0),
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-center text-xs text-slate-500">
-                              {
-                                summary.paymentStatuses.filter(
-                                  (p) => p.completed,
-                                ).length
-                              }
-                              /{stages.length}
-                            </td>
-                            <td
-                              colSpan={2}
-                              className="px-3 py-2.5 text-center font-bold text-green-700"
-                            >
-                              {formatRupiah(summary.totalPendapatan)}
-                            </td>
+                            <td className="px-3 py-2.5 font-bold text-slate-700">TOTAL ANGGARAN</td>
+                            <td className="px-3 py-2.5 text-right font-bold text-slate-600">{formatRupiah(stages.reduce((s, st) => s + st.nominal, 0))}</td>
+                            <td className="px-3 py-2.5 text-center text-xs text-slate-500">{summary.paymentStatuses.filter((p) => p.completed).length}/{stages.length}</td>
+                            <td colSpan={2} className="px-3 py-2.5 text-center font-bold text-green-700">{formatRupiah(summary.totalPendapatan)}</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -1009,28 +672,21 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ═══════════════════════════════════════════════════════
-            TAB: LEADERBOARD
-        ═══════════════════════════════════════════════════════ */}
+        {/* ═══ LEADERBOARD ═══ */}
         {tab === "leaderboard" && (
           <div className="max-w-2xl mx-auto space-y-4">
             <div className="card bg-gradient-to-r from-yellow-50 to-amber-50 border-yellow-200">
               <div className="flex items-center gap-3">
                 <Trophy className="w-8 h-8 text-yellow-500" />
                 <div>
-                  <h2 className="font-bold text-slate-800 text-lg">
-                    Leaderboard
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Ranking berdasarkan keuntungan (Pendapatan − Pengeluaran)
-                  </p>
+                  <h2 className="font-bold text-slate-800 text-lg">Leaderboard</h2>
+                  <p className="text-xs text-slate-500">Ranking berdasarkan keuntungan (Pendapatan − Pengeluaran)</p>
                 </div>
               </div>
             </div>
             {summaries.length === 0 ? (
               <div className="card text-center py-12 text-slate-400">
-                <Trophy className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                <p>Belum ada tim untuk ditampilkan</p>
+                <Trophy className="w-12 h-12 mx-auto mb-3 opacity-30" /><p>Belum ada tim untuk ditampilkan</p>
               </div>
             ) : (
               <Leaderboard summaries={summaries} settings={settings!} />
@@ -1038,79 +694,36 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ═══════════════════════════════════════════════════════
-            TAB: KELOLA TIM
-        ═══════════════════════════════════════════════════════ */}
+        {/* ═══ KELOLA TIM ═══ */}
         {tab === "teams" && (
           <div className="max-w-lg space-y-4">
             <div className="card">
-              <h2 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                <Plus className="w-5 h-5 text-blue-600" /> Tambah Tim Baru
-              </h2>
+              <h2 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Plus className="w-5 h-5 text-blue-600" /> Tambah Tim Baru</h2>
               <form onSubmit={handleAddTeam} className="flex gap-3">
-                <input
-                  value={newTeamName}
-                  onChange={(e) => setNewTeamName(e.target.value)}
-                  className="input-field"
-                  placeholder="Nama tim (contoh: Tim Alpha)"
-                />
-                <button
-                  type="submit"
-                  disabled={addingTeam || !newTeamName.trim()}
-                  className="btn-primary whitespace-nowrap flex items-center gap-1.5"
-                >
-                  {addingTeam ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Plus className="w-4 h-4" />
-                  )}{" "}
-                  Tambah
+                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} className="input-field" placeholder="Nama tim (contoh: Tim Alpha)" />
+                <button type="submit" disabled={addingTeam || !newTeamName.trim()} className="btn-primary whitespace-nowrap flex items-center gap-1.5">
+                  {addingTeam ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Tambah
                 </button>
               </form>
             </div>
             <div className="card">
-              <h2 className="font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-600" /> Daftar Tim (
-                {teams.length})
-              </h2>
+              <h2 className="font-semibold text-slate-800 mb-4 flex items-center gap-2"><Users className="w-5 h-5 text-blue-600" /> Daftar Tim ({teams.length})</h2>
               {teams.length === 0 ? (
                 <p className="text-slate-400 text-sm italic">Belum ada tim</p>
               ) : (
                 <div className="space-y-2">
                   {teams.map((team, idx) => {
-                    const summary = summaries.find(
-                      (s) => s.team.id === team.id,
-                    );
+                    const summary = summaries.find((s) => s.team.id === team.id);
                     return (
-                      <div
-                        key={team.id}
-                        className="flex items-center justify-between p-3 bg-slate-50 rounded-xl"
-                      >
+                      <div key={team.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
                         <div className="flex items-center gap-3">
-                          <span className="w-8 h-8 bg-blue-100 text-blue-700 text-sm font-bold rounded-lg flex items-center justify-center">
-                            {idx + 1}
-                          </span>
+                          <span className="w-8 h-8 bg-blue-100 text-blue-700 text-sm font-bold rounded-lg flex items-center justify-center">{idx + 1}</span>
                           <div>
-                            <p className="font-medium text-slate-700">
-                              {team.namaTeam}
-                            </p>
-                            {summary && (
-                              <p className="text-xs text-slate-400">
-                                {summary.submissions.length} submisi ·{" "}
-                                {formatRupiah(summary.totalPengeluaran)}{" "}
-                                pengeluaran
-                              </p>
-                            )}
+                            <p className="font-medium text-slate-700">{team.namaTeam}</p>
+                            {summary && <p className="text-xs text-slate-400">{summary.submissions.length} submisi · {formatRupiah(summary.totalPengeluaran)} pengeluaran</p>}
                           </div>
                         </div>
-                        <button
-                          onClick={() =>
-                            handleDeleteTeam(team.id, team.namaTeam)
-                          }
-                          className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <button onClick={() => handleDeleteTeam(team.id, team.namaTeam)} className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"><Trash2 className="w-4 h-4" /></button>
                       </div>
                     );
                   })}
@@ -1120,159 +733,52 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ═══════════════════════════════════════════════════════
-            TAB: PENGATURAN
-        ═══════════════════════════════════════════════════════ */}
+        {/* ═══ PENGATURAN ═══ */}
         {tab === "settings" && (
           <div className="space-y-5 max-w-2xl">
             <form onSubmit={handleSaveSettings} className="space-y-5">
+
               {/* Workshop info */}
               <div className="card space-y-4">
-                <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                  <Settings className="w-5 h-5 text-blue-600" /> Pengaturan
-                  Workshop
-                </h2>
+                <h2 className="font-semibold text-slate-800 flex items-center gap-2"><Settings className="w-5 h-5 text-blue-600" /> Pengaturan Workshop</h2>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Nama Workshop
-                    </label>
-                    <input
-                      className="input-field"
-                      value={settingsForm.namaWorkshop ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          namaWorkshop: e.target.value,
-                        }))
-                      }
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Nama Workshop</label>
+                    <input className="input-field" value={settingsForm.namaWorkshop ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, namaWorkshop: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Jumlah Hari
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      className="input-field"
-                      value={settingsForm.jumlahHari ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          jumlahHari: Number(e.target.value),
-                        }))
-                      }
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Jumlah Hari</label>
+                    <input type="number" min="1" className="input-field" value={settingsForm.jumlahHari ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, jumlahHari: Number(e.target.value) }))} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Password Admin
-                    </label>
-                    <input
-                      type="text"
-                      className="input-field"
-                      value={settingsForm.adminPassword ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          adminPassword: e.target.value,
-                        }))
-                      }
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Password Admin</label>
+                    <input type="text" className="input-field" value={settingsForm.adminPassword ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, adminPassword: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Total Nilai Project (Rp){" "}
-                    </label>
-                    <input
-                      type="number"
-                      className="input-field"
-                      value={settingsForm.maxPengeluaran ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          maxPengeluaran: Number(e.target.value),
-                        }))
-                      }
-                    />
-                    <p className="text-xs text-slate-400 mt-1">
-                      {formatRupiah(settingsForm.maxPengeluaran ?? 0)}
-                    </p>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Total Nilai Project (Rp)</label>
+                    <input type="number" className="input-field" value={settingsForm.maxPengeluaran ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, maxPengeluaran: Number(e.target.value) }))} />
+                    <p className="text-xs text-slate-400 mt-1">{formatRupiah(settingsForm.maxPengeluaran ?? 0)}</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Maksimal Pengeluaran (Rp){" "}
-                    </label>
-                    <input
-                      type="number"
-                      className="input-field"
-                      value={settingsForm.jumlahPendapatan ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          jumlahPendapatan: Number(e.target.value),
-                        }))
-                      }
-                    />
-                    <p className="text-xs text-slate-400 mt-1">
-                      {formatRupiah(settingsForm.jumlahPendapatan ?? 0)}
-                    </p>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Maksimal Pengeluaran (Rp)</label>
+                    <input type="number" className="input-field" value={settingsForm.jumlahPendapatan ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, jumlahPendapatan: Number(e.target.value) }))} />
+                    <p className="text-xs text-slate-400 mt-1">{formatRupiah(settingsForm.jumlahPendapatan ?? 0)}</p>
                   </div>
                 </div>
               </div>
 
-              {/* Cloudinary config */}
+              {/* Cloudinary */}
               <div className="card space-y-4">
-                <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                  <CloudOff className="w-5 h-5 text-blue-600" /> Konfigurasi
-                  Cloudinary
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Diperlukan untuk mengupload gambar material. Buat akun gratis
-                  di{" "}
-                  <a
-                    href="https://cloudinary.com"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-blue-600 underline"
-                  >
-                    cloudinary.com
-                  </a>
-                  , lalu buat <strong>unsigned upload preset</strong>.
-                </p>
+                <h2 className="font-semibold text-slate-800 flex items-center gap-2"><CloudOff className="w-5 h-5 text-blue-600" /> Konfigurasi Cloudinary</h2>
+                <p className="text-xs text-slate-500">Diperlukan untuk mengupload gambar material. Buat akun gratis di <a href="https://cloudinary.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">cloudinary.com</a>, lalu buat <strong>unsigned upload preset</strong>.</p>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Cloud Name
-                    </label>
-                    <input
-                      className="input-field"
-                      placeholder="contoh: my-cloud"
-                      value={settingsForm.cloudinaryCloudName ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          cloudinaryCloudName: e.target.value,
-                        }))
-                      }
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Cloud Name</label>
+                    <input className="input-field" placeholder="contoh: my-cloud" value={settingsForm.cloudinaryCloudName ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, cloudinaryCloudName: e.target.value }))} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">
-                      Upload Preset (unsigned)
-                    </label>
-                    <input
-                      className="input-field"
-                      placeholder="contoh: brics_unsigned"
-                      value={settingsForm.cloudinaryUploadPreset ?? ""}
-                      onChange={(e) =>
-                        setSettingsForm((p) => ({
-                          ...p,
-                          cloudinaryUploadPreset: e.target.value,
-                        }))
-                      }
-                    />
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Upload Preset (unsigned)</label>
+                    <input className="input-field" placeholder="contoh: brics_unsigned" value={settingsForm.cloudinaryUploadPreset ?? ""} onChange={(e) => setSettingsForm((p) => ({ ...p, cloudinaryUploadPreset: e.target.value }))} />
                   </div>
                 </div>
               </div>
@@ -1280,17 +786,8 @@ export default function AdminPage() {
               {/* Payment Stages */}
               <div className="card">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="font-semibold text-slate-800 flex items-center gap-2">
-                    <CreditCard className="w-5 h-5 text-blue-600" /> Tahapan
-                    Pembayaran
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={addPaymentStage}
-                    className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  >
-                    <Plus className="w-4 h-4" /> Tambah Tahap
-                  </button>
+                  <h2 className="font-semibold text-slate-800 flex items-center gap-2"><CreditCard className="w-5 h-5 text-blue-600" /> Tahapan Pembayaran</h2>
+                  <button type="button" onClick={addPaymentStage} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 font-medium"><Plus className="w-4 h-4" /> Tambah Tahap</button>
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200">
                   <table className="w-full text-sm">
@@ -1305,83 +802,37 @@ export default function AdminPage() {
                     <tbody>
                       {settingsForm.paymentStages?.map((s, i) => (
                         <tr key={s.id} className="border-t border-slate-100">
-                          <td className="px-3 py-1.5 text-slate-400 text-xs">
-                            {i + 1}
-                          </td>
-                          <td className="px-3 py-1.5">
-                            <input
-                              className="input-field text-xs"
-                              value={s.label}
-                              onChange={(e) =>
-                                updateStage(i, "label", e.target.value)
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-1.5">
-                            <input
-                              type="number"
-                              className="input-field text-xs"
-                              value={s.nominal}
-                              onChange={(e) =>
-                                updateStage(i, "nominal", e.target.value)
-                              }
-                            />
-                          </td>
-                          <td className="px-3 py-1.5">
-                            <button
-                              type="button"
-                              onClick={() => removePaymentStage(i)}
-                              className="p-1 text-red-400 hover:text-red-600 rounded"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
+                          <td className="px-3 py-1.5 text-slate-400 text-xs">{i + 1}</td>
+                          <td className="px-3 py-1.5"><input className="input-field text-xs" value={s.label} onChange={(e) => updateStage(i, "label", e.target.value)} /></td>
+                          <td className="px-3 py-1.5"><input type="number" className="input-field text-xs" value={s.nominal} onChange={(e) => updateStage(i, "nominal", e.target.value)} /></td>
+                          <td className="px-3 py-1.5"><button type="button" onClick={() => removePaymentStage(i)} className="p-1 text-red-400 hover:text-red-600 rounded"><Trash2 className="w-3.5 h-3.5" /></button></td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                       <tr>
-                        <td
-                          className="px-3 py-2.5 font-bold text-slate-700"
-                          colSpan={2}
-                        >
-                          TOTAL
-                        </td>
-                        <td className="px-3 py-2.5 font-bold text-blue-700 text-xs">
-                          {formatRupiah(
-                            settingsForm.paymentStages?.reduce(
-                              (s, p) => s + p.nominal,
-                              0,
-                            ) ?? 0,
-                          )}
-                        </td>
+                        <td className="px-3 py-2.5 font-bold text-slate-700" colSpan={2}>TOTAL</td>
+                        <td className="px-3 py-2.5 font-bold text-blue-700 text-xs">{formatRupiah(settingsForm.paymentStages?.reduce((s, p) => s + p.nominal, 0) ?? 0)}</td>
                         <td />
                       </tr>
                     </tfoot>
                   </table>
                 </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  ⚠️ Perubahan nominal tidak mempengaruhi pembayaran yang sudah
-                  dicatat.
-                </p>
+                <p className="text-xs text-slate-400 mt-2">⚠️ Perubahan nominal tidak mempengaruhi pembayaran yang sudah dicatat.</p>
               </div>
 
-              {/* Materials */}
+              {/* Materials + Packages */}
               <div className="card">
-                <h2 className="font-semibold text-slate-800 mb-1 flex items-center gap-2">
-                  <Package className="w-5 h-5 text-blue-600" /> Data Material &
-                  SDM
-                </h2>
-                <p className="text-xs text-slate-500 mb-4">
-                  Seret baris (≡) untuk mengurutkan ulang. Klik ikon gambar
-                  untuk mengunggah foto material.
-                </p>
+                <h2 className="font-semibold text-slate-800 mb-1 flex items-center gap-2"><Package className="w-5 h-5 text-blue-600" /> Data Material & SDM</h2>
+                <p className="text-xs text-slate-500 mb-4">Seret baris (≡) untuk mengurutkan ulang. Klik ikon gambar untuk foto. Klik <Tag className="inline w-3 h-3" /> untuk mengatur opsi paket per material.</p>
 
                 <div className="space-y-2">
                   {settingsForm.materials?.map((m, i) => {
                     const isDragging = drag.draggingIdx === i;
                     const isOver = drag.overIdx === i && drag.draggingIdx !== i;
                     const uploading = uploadState[i] === "uploading";
+                    const isPkgExpanded = expandedPackageIdx === i;
+                    const pkgCount = (m.packages ?? []).length;
 
                     return (
                       <div
@@ -1391,83 +842,121 @@ export default function AdminPage() {
                         onDragEnter={() => handleDragEnter(i)}
                         onDragOver={(e) => e.preventDefault()}
                         onDragEnd={handleDragEnd}
-                        className={`flex items-center gap-2 p-2 rounded-xl border transition-all select-none
+                        className={`rounded-xl border transition-all select-none
                           ${isDragging ? "opacity-40 scale-95 bg-blue-50 border-blue-300" : ""}
                           ${isOver ? "border-blue-400 bg-blue-50 shadow-md" : "border-slate-200 bg-white"}
                         `}
                       >
-                        <button
-                          type="button"
-                          className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 px-1 flex-shrink-0"
-                          title="Seret untuk mengurutkan"
-                        >
-                          <GripVertical className="w-4 h-4" />
-                        </button>
-                        <span className="text-xs text-slate-400 w-5 text-center flex-shrink-0">
-                          {i + 1}
-                        </span>
-                        <div className="relative flex-shrink-0">
-                          {m.imageUrl ? (
-                            <div className="relative group">
-                              <img
-                                src={m.imageUrl}
-                                alt={m.namaKomponen}
-                                className="w-10 h-10 rounded-lg object-cover border border-slate-200"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => removeMaterialImage(i)}
-                                className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full hidden group-hover:flex items-center justify-center"
-                              >
-                                <X className="w-2.5 h-2.5" />
+                        {/* Main row */}
+                        <div className="flex items-center gap-2 p-2">
+                          <button type="button" className="cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500 px-1 flex-shrink-0" title="Seret untuk mengurutkan">
+                            <GripVertical className="w-4 h-4" />
+                          </button>
+                          <span className="text-xs text-slate-400 w-5 text-center flex-shrink-0">{i + 1}</span>
+
+                          {/* Image */}
+                          <div className="relative flex-shrink-0">
+                            {m.imageUrl ? (
+                              <div className="relative group">
+                                <img src={m.imageUrl} alt={m.namaKomponen} className="w-10 h-10 rounded-lg object-cover border border-slate-200" />
+                                <button type="button" onClick={() => removeMaterialImage(i)} className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full hidden group-hover:flex items-center justify-center"><X className="w-2.5 h-2.5" /></button>
+                              </div>
+                            ) : (
+                              <label className={`w-10 h-10 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer transition-colors ${uploading ? "border-blue-400 bg-blue-50" : "border-slate-300 hover:border-blue-400 hover:bg-blue-50"}`}>
+                                {uploading ? <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> : <Upload className="w-4 h-4 text-slate-400" />}
+                                <input type="file" accept="image/*" className="hidden" disabled={uploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) handleImageUpload(i, file); e.target.value = ""; }} />
+                              </label>
+                            )}
+                          </div>
+
+                          <input className="input-field text-xs flex-1 min-w-0" value={m.namaKomponen} onChange={(e) => updateMaterial(i, "namaKomponen", e.target.value)} />
+                          <input className="input-field text-xs w-20 flex-shrink-0" value={m.satuan} onChange={(e) => updateMaterial(i, "satuan", e.target.value)} />
+                          <input type="number" className="input-field text-xs w-28 flex-shrink-0" value={m.hargaPerPcs} onChange={(e) => updateMaterial(i, "hargaPerPcs", e.target.value)} />
+
+                          {/* Package toggle button */}
+                          <button
+                            type="button"
+                            onClick={() => setExpandedPackageIdx(isPkgExpanded ? null : i)}
+                            title="Kelola opsi paket"
+                            className={`flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg border transition-colors flex-shrink-0 ${
+                              pkgCount > 0
+                                ? "border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                : "border-slate-300 text-slate-500 hover:border-blue-400 hover:text-blue-600"
+                            }`}
+                          >
+                            <Tag className="w-3.5 h-3.5" />
+                            {pkgCount > 0 && <span className="font-semibold">{pkgCount}</span>}
+                          </button>
+                        </div>
+
+                        {/* Package panel */}
+                        {isPkgExpanded && (
+                          <div className="border-t border-slate-200 bg-blue-50/40 px-4 py-3 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-semibold text-blue-700 flex items-center gap-1.5">
+                                <Tag className="w-3.5 h-3.5" /> Opsi Paket untuk {m.namaKomponen}
+                              </p>
+                              <button type="button" onClick={() => addPackage(i)} className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-semibold">
+                                <Plus className="w-3.5 h-3.5" /> Tambah Paket
                               </button>
                             </div>
-                          ) : (
-                            <label
-                              className={`w-10 h-10 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer transition-colors
-                              ${uploading ? "border-blue-400 bg-blue-50" : "border-slate-300 hover:border-blue-400 hover:bg-blue-50"}`}
-                            >
-                              {uploading ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-                              ) : (
-                                <Upload className="w-4 h-4 text-slate-400" />
-                              )}
-                              <input
-                                type="file"
-                                accept="image/*"
-                                className="hidden"
-                                disabled={uploading}
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0];
-                                  if (file) handleImageUpload(i, file);
-                                  e.target.value = "";
-                                }}
-                              />
-                            </label>
-                          )}
-                        </div>
-                        <input
-                          className="input-field text-xs flex-1 min-w-0"
-                          value={m.namaKomponen}
-                          onChange={(e) =>
-                            updateMaterial(i, "namaKomponen", e.target.value)
-                          }
-                        />
-                        <input
-                          className="input-field text-xs w-20 flex-shrink-0"
-                          value={m.satuan}
-                          onChange={(e) =>
-                            updateMaterial(i, "satuan", e.target.value)
-                          }
-                        />
-                        <input
-                          type="number"
-                          className="input-field text-xs w-28 flex-shrink-0"
-                          value={m.hargaPerPcs}
-                          onChange={(e) =>
-                            updateMaterial(i, "hargaPerPcs", e.target.value)
-                          }
-                        />
+
+                            {(m.packages ?? []).length === 0 ? (
+                              <p className="text-xs text-slate-400 italic py-1">Belum ada opsi paket. Material hanya bisa dibeli satuan.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {(m.packages ?? []).map((pkg, pkgIdx) => (
+                                  <div key={pkg.id} className="flex items-center gap-2 bg-white rounded-lg p-2 border border-slate-200">
+                                    <div className="flex-1 min-w-0">
+                                      <input
+                                        className="input-field text-xs w-full mb-1"
+                                        placeholder="Label paket (contoh: Per 10 Pcs)"
+                                        value={pkg.label}
+                                        onChange={(e) => updatePackage(i, pkgIdx, "label", e.target.value)}
+                                      />
+                                      <div className="flex gap-2">
+                                        <div className="flex-1">
+                                          <label className="text-xs text-slate-400">Isi per paket ({m.satuan})</label>
+                                          <input
+                                            type="number"
+                                            min="1"
+                                            className="input-field text-xs w-full"
+                                            placeholder="10"
+                                            value={pkg.qtyPerPackage || ""}
+                                            onChange={(e) => updatePackage(i, pkgIdx, "qtyPerPackage", e.target.value)}
+                                          />
+                                        </div>
+                                        <div className="flex-1">
+                                          <label className="text-xs text-slate-400">Harga per paket (Rp)</label>
+                                          <input
+                                            type="number"
+                                            min="0"
+                                            className="input-field text-xs w-full"
+                                            placeholder="50000"
+                                            value={pkg.hargaPerPackage || ""}
+                                            onChange={(e) => updatePackage(i, pkgIdx, "hargaPerPackage", e.target.value)}
+                                          />
+                                        </div>
+                                      </div>
+                                      {pkg.qtyPerPackage > 0 && pkg.hargaPerPackage > 0 && (
+                                        <p className="text-xs text-slate-400 mt-1">
+                                          Efektif: {formatRupiah(Math.round(pkg.hargaPerPackage / pkg.qtyPerPackage))}/{m.satuan}
+                                          {" "} vs satuan {formatRupiah(m.hargaPerPcs)}/{m.satuan}
+                                          {pkg.hargaPerPackage / pkg.qtyPerPackage < m.hargaPerPcs && (
+                                            <span className="ml-1 text-green-600 font-semibold">✓ Lebih hemat</span>
+                                          )}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <button type="button" onClick={() => removePackage(i, pkgIdx)} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg flex-shrink-0">
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     );
                   })}
@@ -1480,63 +969,31 @@ export default function AdminPage() {
                   <span className="flex-1">Nama Komponen</span>
                   <span className="w-20 flex-shrink-0">Satuan</span>
                   <span className="w-28 flex-shrink-0">Harga/Satuan (Rp)</span>
+                  <span className="w-12 flex-shrink-0 text-center">Paket</span>
                 </div>
-
-                <p className="text-xs text-slate-400 mt-3">
-                  ⚠️ Perubahan harga tidak mempengaruhi submission yang sudah
-                  ada.
-                </p>
+                <p className="text-xs text-slate-400 mt-3">⚠️ Perubahan harga tidak mempengaruhi submission yang sudah ada.</p>
               </div>
 
-              <button
-                type="submit"
-                disabled={savingSettings}
-                className="btn-primary flex items-center gap-2"
-              >
-                {savingSettings ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
+              <button type="submit" disabled={savingSettings} className="btn-primary flex items-center gap-2">
+                {savingSettings ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                 {savingSettings ? "Menyimpan..." : "Simpan Semua Pengaturan"}
               </button>
             </form>
 
-            {/* ── Danger Zone ── */}
+            {/* Danger Zone */}
             <div className="card border-red-200 bg-red-50/50">
-              <h2 className="font-semibold text-red-700 flex items-center gap-2 mb-1">
-                <RotateCcw className="w-5 h-5" /> Reset Data Transaksi
-              </h2>
-              <p className="text-xs text-slate-600 mb-4">
-                Hapus semua riwayat pembelian dan status pembayaran dari seluruh
-                tim. Pengaturan workshop, daftar tim, dan data material{" "}
-                <strong>tidak akan berubah</strong>. Gunakan fitur ini untuk
-                memulai ulang workshop dengan template yang sama.
-              </p>
+              <h2 className="font-semibold text-red-700 flex items-center gap-2 mb-1"><RotateCcw className="w-5 h-5" /> Reset Data Transaksi</h2>
+              <p className="text-xs text-slate-600 mb-4">Hapus semua riwayat pembelian dan status pembayaran dari seluruh tim. Pengaturan workshop, daftar tim, dan data material <strong>tidak akan berubah</strong>. Gunakan fitur ini untuk memulai ulang workshop dengan template yang sama.</p>
               <div className="flex items-center justify-between">
                 <div className="text-xs text-slate-500">
                   {totalSubmissions > 0 ? (
-                    <span className="font-semibold text-red-600">
-                      {totalSubmissions} submission aktif
-                    </span>
+                    <span className="font-semibold text-red-600">{totalSubmissions} submission aktif</span>
                   ) : (
-                    <span className="text-green-600 font-semibold">
-                      Tidak ada data transaksi
-                    </span>
-                  )}{" "}
-                  dari {teams.length} tim
+                    <span className="text-green-600 font-semibold">Tidak ada data transaksi</span>
+                  )}{" "}dari {teams.length} tim
                 </div>
-                <button
-                  type="button"
-                  onClick={handleResetSubmissions}
-                  disabled={resetting || totalSubmissions === 0}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {resetting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <RotateCcw className="w-4 h-4" />
-                  )}
+                <button type="button" onClick={handleResetSubmissions} disabled={resetting || totalSubmissions === 0} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                  {resetting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
                   {resetting ? "Mereset..." : "Reset Transaksi"}
                 </button>
               </div>

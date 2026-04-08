@@ -2,24 +2,139 @@
 import { MaterialItem, PaymentStage } from "@/types";
 
 export const DEFAULT_MATERIALS: Omit<MaterialItem, "id">[] = [
-  { namaKomponen: "Komponen A (Bata Kecil)",     satuan: "Pcs",     hargaPerPcs: 5000,    order: 0 },
-  { namaKomponen: "Komponen B (Bata Besar)",      satuan: "Pcs",     hargaPerPcs: 10000,   order: 1 },
-  { namaKomponen: "Komponen C (Tiang Penyangga)", satuan: "Pcs",     hargaPerPcs: 50000,   order: 2 },
-  { namaKomponen: "Komponen D (Kanal C)",         satuan: "Pcs",     hargaPerPcs: 100000,  order: 3 },
-  { namaKomponen: "Komponen E (Bata Penyangga)",  satuan: "Pcs",     hargaPerPcs: 45000,   order: 4 },
-  { namaKomponen: "Komponen F (Pagar)",           satuan: "Pcs",     hargaPerPcs: 150000,  order: 5 },
-  { namaKomponen: "Komponen G (Tiang)",           satuan: "Pcs",     hargaPerPcs: 125000,  order: 6 },
-  { namaKomponen: "Komponen H (Atap)",            satuan: "Pcs",     hargaPerPcs: 200000,  order: 7 },
-  { namaKomponen: "Komponen I (Atap)",            satuan: "Pcs",     hargaPerPcs: 175000,  order: 8 },
-  { namaKomponen: "Semen",                        satuan: "Sak",     hargaPerPcs: 35000,   order: 9 },
-  { namaKomponen: "Cat",                          satuan: "Pil",     hargaPerPcs: 110000,  order: 10 },
-  { namaKomponen: "Alat",                         satuan: "Pcs",     hargaPerPcs: 65000,   order: 11 },
-  { namaKomponen: "Pintu",                        satuan: "Pcs",     hargaPerPcs: 600000,  order: 12 },
-  { namaKomponen: "Jendela",                      satuan: "Pcs",     hargaPerPcs: 350000,  order: 13 },
-  { namaKomponen: "Fondasi Lantai 1",             satuan: "Pcs",     hargaPerPcs: 1750000, order: 14 },
-  { namaKomponen: "Fondasi Lantai 2",             satuan: "Pcs",     hargaPerPcs: 1500000, order: 15 },
-  { namaKomponen: "Fondasi Lantai 3",             satuan: "Pcs",     hargaPerPcs: 1450000, order: 16 },
-  { namaKomponen: "Pekerja",                      satuan: "Org/Hari",hargaPerPcs: 55000,   order: 17 },
+  {
+    namaKomponen: "Komponen A (Bata Kecil)",
+    satuan: "Pcs",
+    hargaPerPcs: 6000,
+    order: 0,
+    packages: [
+      { id: "pkg-a-0", label: "Per 10 Pcs", qtyPerPackage: 10, hargaPerPackage: 50000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen B (Bata Besar)",
+    satuan: "Pcs",
+    hargaPerPcs: 3000,
+    order: 1,
+    packages: [
+      { id: "pkg-b-0", label: "Per 50 Pcs", qtyPerPackage: 50, hargaPerPackage: 100000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen C (Tiang Penyangga)",
+    satuan: "Pcs",
+    hargaPerPcs: 60000,
+    order: 2,
+    packages: [
+      { id: "pkg-c-0", label: "Per 12 Pcs", qtyPerPackage: 12, hargaPerPackage: 600000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen D (Kanal C)",
+    satuan: "Pcs",
+    hargaPerPcs: 12000,
+    order: 3,
+    packages: [
+      { id: "pkg-d-0", label: "Per 10 Pcs", qtyPerPackage: 10, hargaPerPackage: 100000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen E (Bata Penyangga)",
+    satuan: "Pcs",
+    hargaPerPcs: 50000,
+    order: 4,
+    packages: [
+      { id: "pkg-e-0", label: "Per 3 Pcs", qtyPerPackage: 3, hargaPerPackage: 135000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen F (Pagar)",
+    satuan: "Pcs",
+    hargaPerPcs: 175000,
+    order: 5,
+    packages: [
+      { id: "pkg-f-0", label: "Per 4 Pcs", qtyPerPackage: 4, hargaPerPackage: 600000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen G (Tiang)",
+    satuan: "Pcs",
+    hargaPerPcs: 140000,
+    order: 6,
+    packages: [
+      { id: "pkg-g-0", label: "Per 11 Pcs", qtyPerPackage: 11, hargaPerPackage: 1375000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen H (Atap)",
+    satuan: "Pcs",
+    hargaPerPcs: 300000,
+    order: 7,
+    packages: [
+      { id: "pkg-h-0", label: "Per 6 Pcs", qtyPerPackage: 6, hargaPerPackage: 1200000 },
+    ],
+  },
+  {
+    namaKomponen: "Komponen I (Atap)",
+    satuan: "Pcs",
+    hargaPerPcs: 175000,
+    order: 8,
+    // no package for this one in the Excel
+  },
+  {
+    namaKomponen: "Semen",
+    satuan: "Sak",
+    hargaPerPcs: 35000,
+    order: 9,
+  },
+  {
+    namaKomponen: "Cat",
+    satuan: "Pil",
+    hargaPerPcs: 110000,
+    order: 10,
+  },
+  {
+    namaKomponen: "Alat",
+    satuan: "Pcs",
+    hargaPerPcs: 65000,
+    order: 11,
+  },
+  {
+    namaKomponen: "Pintu",
+    satuan: "Pcs",
+    hargaPerPcs: 600000,
+    order: 12,
+  },
+  {
+    namaKomponen: "Jendela",
+    satuan: "Pcs",
+    hargaPerPcs: 450000,
+    order: 13,
+  },
+  {
+    namaKomponen: "Fondasi Lantai 1",
+    satuan: "Pcs",
+    hargaPerPcs: 1750000,
+    order: 14,
+  },
+  {
+    namaKomponen: "Fondasi Lantai 2",
+    satuan: "Pcs",
+    hargaPerPcs: 1500000,
+    order: 15,
+  },
+  {
+    namaKomponen: "Fondasi Lantai 3",
+    satuan: "Pcs",
+    hargaPerPcs: 1450000,
+    order: 16,
+  },
+  {
+    namaKomponen: "Pekerja",
+    satuan: "Org/Hari",
+    hargaPerPcs: 55000,
+    order: 17,
+  },
 ];
 
 export const DEFAULT_PAYMENT_STAGES: PaymentStage[] = [
@@ -47,8 +162,8 @@ export const DEFAULT_PAYMENT_STAGES: PaymentStage[] = [
 export const DEFAULT_SETTINGS = {
   namaWorkshop: "Workshop Simulasi BRICS",
   jumlahHari: 5,
-  maxPengeluaran: 21700000,   // reference ceiling — shown on admin only
-  jumlahPendapatan: 31000000, // total project value — reference only
+  maxPengeluaran: 21700000,
+  jumlahPendapatan: 31000000,
   adminPassword: "admin123",
   cloudinaryCloudName: "",
   cloudinaryUploadPreset: "",

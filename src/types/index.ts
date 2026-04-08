@@ -1,12 +1,20 @@
 // src/types/index.ts
 
+export interface PackageOption {
+  id: string;            // e.g. "pkg-mat-1-0"
+  label: string;         // e.g. "Per 10 Pcs"
+  qtyPerPackage: number; // how many individual units in 1 package
+  hargaPerPackage: number; // total price per package
+}
+
 export interface MaterialItem {
   id: string;
   namaKomponen: string;
   satuan: string;
   hargaPerPcs: number;
-  imageUrl?: string; // Cloudinary URL
-  order?: number;    // for drag-to-reorder
+  packages?: PackageOption[]; // optional: package purchase options
+  imageUrl?: string;           // Cloudinary URL
+  order?: number;              // for drag-to-reorder
 }
 
 export interface PaymentStage {
@@ -20,23 +28,19 @@ export interface TeamPaymentStatus {
   stageId: string;
   completed: boolean;
   completedAt?: unknown;
-  // bonus/penalty applied at this stage for this team
-  bonus: number; // positive = bonus added (multiples of 1_000_000)
-  penalty: number; // positive = penalty deducted (multiples of 1_000_000)
+  bonus: number;
+  penalty: number;
 }
 
 export interface WorkshopSettings {
   id: string;
   namaWorkshop: string;
   jumlahHari: number;
-  // maxPengeluaran = budget cap (reference only — shown on admin)
   maxPengeluaran: number;
-  // jumlahPendapatan = Total Project Value (reference only — shown on admin)
   jumlahPendapatan: number;
   adminPassword: string;
   materials: MaterialItem[];
   paymentStages: PaymentStage[];
-  // Cloudinary config (stored in settings so it's accessible client-side)
   cloudinaryCloudName?: string;
   cloudinaryUploadPreset?: string;
   createdAt?: unknown;
@@ -57,6 +61,11 @@ export interface PurchaseEntry {
   hargaPerPcs: number;
   jumlah: number;
   totalHarga: number;
+  // Package info (populated when bought as package)
+  isPackage?: boolean;
+  packageLabel?: string;
+  qtyPerPackage?: number;
+  packageCount?: number; // how many packages bought
 }
 
 export interface DailySubmission {
@@ -74,7 +83,7 @@ export interface TeamSummary {
   team: Team;
   submissions: DailySubmission[];
   totalPengeluaran: number;
-  totalPendapatan: number; // sum of completed stage nominals + bonuses - penalties
+  totalPendapatan: number;
   totalPerMaterial: Record<
     string,
     { jumlah: number; total: number; nama: string; satuan: string }
