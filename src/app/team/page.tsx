@@ -7,6 +7,7 @@ import {
   submitDailyPurchase,
   getTeams,
   getTeamPaymentStatuses,
+  getTeamLimits,
 } from "@/lib/db";
 import {
   WorkshopSettings,
@@ -16,6 +17,7 @@ import {
   MaterialItem,
   PackageOption,
   TeamPaymentStatus,
+  TeamLimits,
 } from "@/types";
 import { formatRupiah, getSpendingStatus } from "@/lib/utils";
 import { BONUS_PENALTY_VALUE } from "@/lib/defaultData";
@@ -30,6 +32,7 @@ import {
   Image as ImageIcon,
   Package,
   Layers,
+  ShieldAlert,
 } from "lucide-react";
 
 // ─── Material image preview modal ────────────────────────────────────
@@ -69,24 +72,16 @@ function ImageModal({
 
 // ─── Cart item state ──────────────────────────────────────────────────
 
-/**
- * For each material row, the user can be in one of two modes:
- *  - "satuan": buy individual units (uses hargaPerPcs)
- *  - "paket":  buy packages (uses a selected PackageOption)
- */
 interface CartRow {
   materialId: string;
   namaKomponen: string;
   satuan: string;
   hargaPerPcs: number;
   packages: PackageOption[];
-  // current mode
   mode: "satuan" | "paket";
-  // satuan mode
   satuanJumlah: number;
-  // paket mode
-  selectedPkgId: string; // which package option is active
-  pkgCount: number;      // how many packages
+  selectedPkgId: string;
+  pkgCount: number;
 }
 
 function rowToEntry(row: CartRow): PurchaseEntry | null {
@@ -102,7 +97,6 @@ function rowToEntry(row: CartRow): PurchaseEntry | null {
       isPackage: false,
     };
   }
-  // paket mode
   const pkg = row.packages.find((p) => p.id === row.selectedPkgId);
   if (!pkg || row.pkgCount === 0) return null;
   const totalQty = row.pkgCount * pkg.qtyPerPackage;
@@ -111,7 +105,7 @@ function rowToEntry(row: CartRow): PurchaseEntry | null {
     materialId: row.materialId,
     namaKomponen: row.namaKomponen,
     satuan: row.satuan,
-    hargaPerPcs: pkg.hargaPerPackage / pkg.qtyPerPackage, // effective per pcs
+    hargaPerPcs: pkg.hargaPerPackage / pkg.qtyPerPackage,
     jumlah: totalQty,
     totalHarga,
     isPackage: true,
@@ -135,6 +129,7 @@ export default function TeamPage() {
   const [team, setTeam] = useState<Team | null>(null);
   const [submissions, setSubmissions] = useState<DailySubmission[]>([]);
   const [paymentStatuses, setPaymentStatuses] = useState<TeamPaymentStatus[]>([]);
+  const [teamLimits, setTeamLimits] = useState<TeamLimits | null>(null);
   const [currentHari, setCurrentHari] = useState(1);
   const [cart, setCart] = useState<CartRow[]>([]);
   const [success, setSuccess] = useState(false);
@@ -143,38 +138,32 @@ export default function TeamPage() {
 
   useEffect(() => {
     const teamId = sessionStorage.getItem("selectedTeamId");
-    if (!teamId) {
-      router.push("/");
-      return;
-    }
+    if (!teamId) { router.push("/"); return; }
     load(teamId);
   }, []);
 
   async function load(teamId: string) {
-    const [ws, teams, subs, pays] = await Promise.all([
+    const [ws, teams, subs, pays, limits] = await Promise.all([
       getWorkshopSettings(),
       getTeams(),
       getTeamSubmissions(teamId),
       getTeamPaymentStatuses(teamId),
+      getTeamLimits(teamId),
     ]);
-    if (!ws) {
-      router.push("/");
-      return;
-    }
+    if (!ws) { router.push("/"); return; }
     const t = teams.find((t) => t.id === teamId) || null;
     setSettings(ws);
     setTeam(t);
     setSubmissions(subs);
     setPaymentStatuses(pays);
+    setTeamLimits(limits);
 
     const submittedDays = new Set(subs.map((s) => s.hari));
     let nextDay = 1;
     while (submittedDays.has(nextDay)) nextDay++;
     setCurrentHari(nextDay);
 
-    const sortedMaterials = [...ws.materials].sort(
-      (a, b) => (a.order ?? 0) - (b.order ?? 0)
-    );
+    const sortedMaterials = [...ws.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     initCart(sortedMaterials);
     setLoading(false);
   }
@@ -189,7 +178,7 @@ export default function TeamPage() {
           satuan: m.satuan,
           hargaPerPcs: m.hargaPerPcs,
           packages: pkgs,
-          mode: pkgs.length > 0 ? "paket" : "satuan", // default to paket if available
+          mode: pkgs.length > 0 ? "paket" : "satuan",
           satuanJumlah: 0,
           selectedPkgId: pkgs[0]?.id ?? "",
           pkgCount: 0,
@@ -198,35 +187,68 @@ export default function TeamPage() {
     );
   }
 
+  // ─── Helper: how much of a material has already been bought (all days) ──
+
+  function getBoughtQty(materialId: string): number {
+    return submissions.reduce((sum, sub) => {
+      const entry = sub.entries.find((e) => e.materialId === materialId);
+      return sum + (entry?.jumlah ?? 0);
+    }, 0);
+  }
+
+  function getMaxQty(materialId: string): number {
+    return teamLimits?.limits?.[materialId] ?? 0; // 0 = unlimited
+  }
+
+  /**
+   * How many more units a team can buy today for a given material.
+   * Returns Infinity if unlimited.
+   */
+  function getRemainingQty(materialId: string): number {
+    const max = getMaxQty(materialId);
+    if (max === 0) return Infinity;
+    const bought = getBoughtQty(materialId);
+    return Math.max(0, max - bought);
+  }
+
   // ─── Cart mutations ─────────────────────────────────────────────────
 
   function setMode(idx: number, mode: "satuan" | "paket") {
     setCart((prev) =>
-      prev.map((row, i) =>
-        i === idx ? { ...row, mode, satuanJumlah: 0, pkgCount: 0 } : row
-      )
+      prev.map((row, i) => (i === idx ? { ...row, mode, satuanJumlah: 0, pkgCount: 0 } : row))
     );
   }
 
   function setSatuanJumlah(idx: number, val: string) {
+    const row = cart[idx];
+    const remaining = getRemainingQty(row.materialId);
     const n = Math.max(0, parseInt(val) || 0);
-    setCart((prev) =>
-      prev.map((row, i) => (i === idx ? { ...row, satuanJumlah: n } : row))
-    );
+    const clamped = remaining === Infinity ? n : Math.min(n, remaining);
+    setCart((prev) => prev.map((r, i) => (i === idx ? { ...r, satuanJumlah: clamped } : r)));
   }
 
   function setSelectedPkg(idx: number, pkgId: string) {
     setCart((prev) =>
-      prev.map((row, i) =>
-        i === idx ? { ...row, selectedPkgId: pkgId, pkgCount: 0 } : row
-      )
+      prev.map((row, i) => (i === idx ? { ...row, selectedPkgId: pkgId, pkgCount: 0 } : row))
     );
   }
 
   function setPkgCount(idx: number, val: string) {
+    const row = cart[idx];
     const n = Math.max(0, parseInt(val) || 0);
+    const remaining = getRemainingQty(row.materialId);
+
+    if (remaining === Infinity) {
+      setCart((prev) => prev.map((r, i) => (i === idx ? { ...r, pkgCount: n } : r)));
+      return;
+    }
+
+    // Clamp: how many packages fit within remaining?
+    const activePkg = row.packages.find((p) => p.id === row.selectedPkgId);
+    const qtyPerPkg = activePkg?.qtyPerPackage ?? 1;
+    const maxPkgs = Math.floor(remaining / qtyPerPkg);
     setCart((prev) =>
-      prev.map((row, i) => (i === idx ? { ...row, pkgCount: n } : row))
+      prev.map((r, i) => (i === idx ? { ...r, pkgCount: Math.min(n, maxPkgs) } : r))
     );
   }
 
@@ -236,54 +258,74 @@ export default function TeamPage() {
   const prevTotal = submissions.reduce((s, sub) => s + sub.totalHari, 0);
   const runningTotal = prevTotal + cartTotal;
 
-  const totalPendapatan = (settings?.paymentStages ?? []).reduce(
-    (sum, stage) => {
-      const ps = paymentStatuses.find((p) => p.stageId === stage.id);
-      if (!ps?.completed) return sum;
-      const bonusAmt = (ps.bonus ?? 0) * BONUS_PENALTY_VALUE;
-      const penaltyAmt = (ps.penalty ?? 0) * BONUS_PENALTY_VALUE;
-      return sum + stage.nominal + bonusAmt - penaltyAmt;
-    },
-    0
-  );
+  const totalPendapatan = (settings?.paymentStages ?? []).reduce((sum, stage) => {
+    const ps = paymentStatuses.find((p) => p.stageId === stage.id);
+    if (!ps?.completed) return sum;
+    const bonusAmt = (ps.bonus ?? 0) * BONUS_PENALTY_VALUE;
+    const penaltyAmt = (ps.penalty ?? 0) * BONUS_PENALTY_VALUE;
+    return sum + stage.nominal + bonusAmt - penaltyAmt;
+  }, 0);
 
   const keuntungan = totalPendapatan - prevTotal;
   const stagesCompleted = paymentStatuses.filter((p) => p.completed).length;
   const totalStages = settings?.paymentStages?.length ?? 0;
   const status = getSpendingStatus(runningTotal, totalPendapatan);
-  const pct =
-    totalPendapatan > 0 ? (prevTotal / totalPendapatan) * 100 : 0;
+  const pct = totalPendapatan > 0 ? (prevTotal / totalPendapatan) * 100 : 0;
 
   const sortedMaterials = settings
     ? [...settings.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     : [];
+
+  // ─── Limit violations in current cart ────────────────────────────────
+
+  interface LimitViolation {
+    namaKomponen: string;
+    requested: number;
+    remaining: number;
+    satuan: string;
+  }
+
+  function getLimitViolations(): LimitViolation[] {
+    const violations: LimitViolation[] = [];
+    cart.forEach((row) => {
+      const entry = rowToEntry(row);
+      if (!entry) return;
+      const remaining = getRemainingQty(row.materialId);
+      if (remaining !== Infinity && entry.jumlah > remaining) {
+        violations.push({
+          namaKomponen: row.namaKomponen,
+          requested: entry.jumlah,
+          remaining,
+          satuan: row.satuan,
+        });
+      }
+    });
+    return violations;
+  }
+
+  const limitViolations = getLimitViolations();
+  const hasLimitViolation = limitViolations.length > 0;
 
   // ─── Submit ─────────────────────────────────────────────────────────
 
   async function handleSubmit() {
     if (!team || !settings) return;
 
+    if (hasLimitViolation) {
+      const names = limitViolations.map((v) => `• ${v.namaKomponen}: minta ${v.requested}, sisa ${v.remaining} ${v.satuan}`).join("\n");
+      alert(`Pembelian melebihi batas yang ditetapkan:\n\n${names}\n\nKurangi jumlah pembelian terlebih dahulu.`);
+      return;
+    }
+
     if (totalPendapatan === 0) {
-      if (
-        !confirm(
-          "Belum ada pembayaran yang diterima (anggaran = Rp 0). Lanjutkan tetap submit?"
-        )
-      )
-        return;
+      if (!confirm("Belum ada pembayaran yang diterima (anggaran = Rp 0). Lanjutkan tetap submit?")) return;
     } else if (runningTotal > totalPendapatan) {
-      if (
-        !confirm(
-          `Total pengeluaran (${formatRupiah(runningTotal)}) MELEBIHI anggaran yang diterima (${formatRupiah(totalPendapatan)}). Lanjutkan?`
-        )
-      )
-        return;
+      if (!confirm(`Total pengeluaran (${formatRupiah(runningTotal)}) MELEBIHI anggaran yang diterima (${formatRupiah(totalPendapatan)}). Lanjutkan?`)) return;
     }
 
     setSubmitting(true);
     try {
-      const activeEntries = cart
-        .map((row) => rowToEntry(row))
-        .filter(Boolean) as PurchaseEntry[];
+      const activeEntries = cart.map((row) => rowToEntry(row)).filter(Boolean) as PurchaseEntry[];
       await submitDailyPurchase({
         teamId: team.id,
         workshopId: settings.id,
@@ -318,20 +360,13 @@ export default function TeamPage() {
     <div className="min-h-screen bg-slate-50">
       {/* Image preview modal */}
       {previewImage && (
-        <ImageModal
-          src={previewImage.src}
-          name={previewImage.name}
-          onClose={() => setPreviewImage(null)}
-        />
+        <ImageModal src={previewImage.src} name={previewImage.name} onClose={() => setPreviewImage(null)} />
       )}
 
       {/* Header */}
       <div className="bg-blue-800 text-white px-4 py-4 sticky top-0 z-10 shadow-lg">
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <button
-            onClick={() => router.push("/")}
-            className="flex items-center gap-1 text-blue-200 hover:text-white text-sm"
-          >
+          <button onClick={() => router.push("/")} className="flex items-center gap-1 text-blue-200 hover:text-white text-sm">
             <ArrowLeft className="w-4 h-4" /> Ganti Tim
           </button>
           <div className="text-center">
@@ -342,9 +377,7 @@ export default function TeamPage() {
             {workshopDone ? (
               <span className="text-green-300 font-semibold">Selesai ✓</span>
             ) : (
-              <span>
-                Hari {currentHari}/{settings?.jumlahHari}
-              </span>
+              <span>Hari {currentHari}/{settings?.jumlahHari}</span>
             )}
           </div>
         </div>
@@ -356,40 +389,24 @@ export default function TeamPage() {
           <div className="grid grid-cols-2 gap-4 mb-3">
             <div>
               <p className="text-xs text-slate-500">Pengeluaran</p>
-              <p className="text-xl font-bold text-slate-800">
-                {formatRupiah(prevTotal)}
-              </p>
-              <p className="text-xs text-slate-400">
-                dari anggaran {formatRupiah(totalPendapatan)}
-              </p>
+              <p className="text-xl font-bold text-slate-800">{formatRupiah(prevTotal)}</p>
+              <p className="text-xs text-slate-400">dari anggaran {formatRupiah(totalPendapatan)}</p>
             </div>
             <div className="text-right">
               <p className="text-xs text-slate-500">Anggaran Diterima</p>
-              <p className="text-xl font-bold text-green-700">
-                {formatRupiah(totalPendapatan)}
-              </p>
-              <p className="text-xs text-slate-400">
-                {stagesCompleted}/{totalStages} tahap lunas
-              </p>
+              <p className="text-xl font-bold text-green-700">{formatRupiah(totalPendapatan)}</p>
+              <p className="text-xs text-slate-400">{stagesCompleted}/{totalStages} tahap lunas</p>
             </div>
           </div>
           <div className="w-full bg-slate-200 rounded-full h-2.5 mb-1">
-            <div
-              className={`${status.barColor} h-2.5 rounded-full transition-all`}
-              style={{ width: `${Math.min(pct, 100)}%` }}
-            />
+            <div className={`${status.barColor} h-2.5 rounded-full transition-all`} style={{ width: `${Math.min(pct, 100)}%` }} />
           </div>
           <div className="flex justify-between text-xs text-slate-500 mt-1">
-            <span className={`font-semibold ${status.color}`}>
-              {status.label}
-            </span>
+            <span className={`font-semibold ${status.color}`}>{status.label}</span>
             <span>
               Keuntungan:{" "}
-              <span
-                className={`font-semibold ${keuntungan >= 0 ? "text-green-600" : "text-red-600"}`}
-              >
-                {keuntungan >= 0 ? "+" : ""}
-                {formatRupiah(keuntungan)}
+              <span className={`font-semibold ${keuntungan >= 0 ? "text-green-600" : "text-red-600"}`}>
+                {keuntungan >= 0 ? "+" : ""}{formatRupiah(keuntungan)}
               </span>
             </span>
           </div>
@@ -406,9 +423,7 @@ export default function TeamPage() {
               key={key}
               onClick={() => setView(key as typeof view)}
               className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                view === key
-                  ? "bg-blue-700 text-white"
-                  : "text-slate-500 hover:text-slate-700"
+                view === key ? "bg-blue-700 text-white" : "text-slate-500 hover:text-slate-700"
               }`}
             >
               {label}
@@ -421,9 +436,7 @@ export default function TeamPage() {
             <CheckCircle className="w-6 h-6 text-green-600" />
             <div>
               <p className="font-semibold text-green-800">Berhasil disimpan!</p>
-              <p className="text-green-600 text-sm">
-                Data Hari {currentHari} telah dikunci.
-              </p>
+              <p className="text-green-600 text-sm">Data Hari {currentHari} telah dikunci.</p>
             </div>
           </div>
         )}
@@ -434,12 +447,8 @@ export default function TeamPage() {
             {workshopDone ? (
               <div className="card text-center py-8">
                 <CheckCircle className="w-12 h-12 text-green-500 mx-auto mb-3" />
-                <p className="font-semibold text-slate-700 text-lg">
-                  Workshop Selesai!
-                </p>
-                <p className="text-slate-500 text-sm mt-1">
-                  Semua {settings?.jumlahHari} hari telah diisi.
-                </p>
+                <p className="font-semibold text-slate-700 text-lg">Workshop Selesai!</p>
+                <p className="text-slate-500 text-sm mt-1">Semua {settings?.jumlahHari} hari telah diisi.</p>
               </div>
             ) : (
               <div className="card">
@@ -449,9 +458,7 @@ export default function TeamPage() {
                     Input Hari ke-{currentHari}
                   </h2>
                   {cartTotal > 0 && (
-                    <span className="text-sm font-bold text-blue-700">
-                      {formatRupiah(cartTotal)}
-                    </span>
+                    <span className="text-sm font-bold text-blue-700">{formatRupiah(cartTotal)}</span>
                   )}
                 </div>
 
@@ -459,35 +466,33 @@ export default function TeamPage() {
                   {cart.map((row, idx) => {
                     const mat = sortedMaterials[idx];
                     const hasPkgs = row.packages.length > 0;
-                    const activePkg = row.packages.find(
-                      (p) => p.id === row.selectedPkgId
-                    );
+                    const activePkg = row.packages.find((p) => p.id === row.selectedPkgId);
                     const rowAmt = rowTotal(row);
+                    const maxQty = getMaxQty(row.materialId);
+                    const boughtQty = getBoughtQty(row.materialId);
+                    const remaining = getRemainingQty(row.materialId);
+                    const isLimited = maxQty > 0;
+                    const isExhausted = isLimited && remaining === 0;
+                    const entry = rowToEntry(row);
+                    const isOverLimit = isLimited && entry !== null && entry.jumlah > remaining;
 
                     return (
                       <div
                         key={row.materialId}
-                        className="rounded-xl border border-slate-200 overflow-hidden"
+                        className={`rounded-xl border overflow-hidden ${
+                          isExhausted
+                            ? "border-slate-300 bg-slate-50 opacity-60"
+                            : isOverLimit
+                            ? "border-red-400"
+                            : "border-slate-200"
+                        }`}
                       >
                         {/* Material header row */}
-                        <div className="flex items-center gap-3 px-3 pt-3 pb-2 bg-slate-50">
+                        <div className={`flex items-center gap-3 px-3 pt-3 pb-2 ${isExhausted ? "bg-slate-100" : "bg-slate-50"}`}>
                           {/* Thumbnail */}
                           {mat?.imageUrl ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewImage({
-                                  src: mat.imageUrl!,
-                                  name: row.namaKomponen,
-                                })
-                              }
-                              className="flex-shrink-0"
-                            >
-                              <img
-                                src={mat.imageUrl}
-                                alt={row.namaKomponen}
-                                className="w-10 h-10 rounded-lg object-cover border border-slate-200 hover:opacity-80 transition-opacity"
-                              />
+                            <button type="button" onClick={() => setPreviewImage({ src: mat.imageUrl!, name: row.namaKomponen })} className="flex-shrink-0">
+                              <img src={mat.imageUrl} alt={row.namaKomponen} className="w-10 h-10 rounded-lg object-cover border border-slate-200 hover:opacity-80 transition-opacity" />
                             </button>
                           ) : (
                             <div className="w-10 h-10 rounded-lg bg-slate-200 flex items-center justify-center flex-shrink-0">
@@ -496,155 +501,162 @@ export default function TeamPage() {
                           )}
 
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-slate-800 truncate">
-                              {row.namaKomponen}
-                            </p>
+                            <p className="text-sm font-semibold text-slate-800 truncate">{row.namaKomponen}</p>
                             <p className="text-xs text-slate-500">
-                              Satuan:{" "}
-                              {formatRupiah(row.hargaPerPcs)}/{row.satuan}
+                              Satuan: {formatRupiah(row.hargaPerPcs)}/{row.satuan}
                             </p>
                           </div>
 
-                          {rowAmt > 0 && (
-                            <span className="text-sm font-bold text-blue-700 flex-shrink-0">
-                              {formatRupiah(rowAmt)}
-                            </span>
-                          )}
+                          <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                            {rowAmt > 0 && (
+                              <span className="text-sm font-bold text-blue-700">{formatRupiah(rowAmt)}</span>
+                            )}
+                            {/* Limit badge */}
+                            {isLimited && (
+                              <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                isExhausted
+                                  ? "bg-slate-200 text-slate-500"
+                                  : isOverLimit
+                                  ? "bg-red-100 text-red-700"
+                                  : remaining <= maxQty * 0.2
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-blue-100 text-blue-700"
+                              }`}>
+                                <ShieldAlert className="w-3 h-3" />
+                                {isExhausted
+                                  ? "Habis"
+                                  : `Sisa ${remaining} ${row.satuan}`}
+                              </span>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Mode toggle (only shown if packages exist) */}
-                        {hasPkgs && (
-                          <div className="flex gap-1 px-3 pb-2 bg-slate-50 border-b border-slate-200">
-                            <button
-                              type="button"
-                              onClick={() => setMode(idx, "paket")}
-                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-                                row.mode === "paket"
-                                  ? "bg-blue-700 text-white"
-                                  : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"
-                              }`}
-                            >
-                              <Package className="w-3.5 h-3.5" /> Beli Paket
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setMode(idx, "satuan")}
-                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
-                                row.mode === "satuan"
-                                  ? "bg-blue-700 text-white"
-                                  : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"
-                              }`}
-                            >
-                              <Layers className="w-3.5 h-3.5" /> Beli Satuan
-                            </button>
+                        {/* Limit progress bar */}
+                        {isLimited && (
+                          <div className="px-3 pb-1.5 bg-slate-50 border-b border-slate-100">
+                            <div className="flex justify-between text-xs text-slate-400 mb-0.5">
+                              <span>Sudah dibeli: {boughtQty} / {maxQty} {row.satuan}</span>
+                              <span>{Math.round((boughtQty / maxQty) * 100)}%</span>
+                            </div>
+                            <div className="w-full bg-slate-200 rounded-full h-1.5">
+                              <div
+                                className={`h-1.5 rounded-full transition-all ${
+                                  boughtQty >= maxQty
+                                    ? "bg-slate-400"
+                                    : boughtQty / maxQty >= 0.8
+                                    ? "bg-amber-500"
+                                    : "bg-blue-500"
+                                }`}
+                                style={{ width: `${Math.min((boughtQty / maxQty) * 100, 100)}%` }}
+                              />
+                            </div>
                           </div>
                         )}
 
-                        {/* Input area */}
-                        <div className="px-3 py-2.5 bg-white">
-                          {row.mode === "satuan" || !hasPkgs ? (
-                            /* SATUAN mode */
-                            <div className="flex items-center gap-3">
-                              <span className="text-xs text-slate-500 flex-1">
-                                Jumlah ({row.satuan})
-                              </span>
-                              <input
-                                type="number"
-                                min="0"
-                                value={row.satuanJumlah || ""}
-                                onChange={(e) =>
-                                  setSatuanJumlah(idx, e.target.value)
-                                }
-                                className="w-24 text-center border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                                placeholder="0"
-                              />
-                              <div className="w-28 text-right">
-                                <p className="text-sm font-semibold text-slate-700">
-                                  {row.satuanJumlah > 0
-                                    ? formatRupiah(
-                                        row.satuanJumlah * row.hargaPerPcs
-                                      )
-                                    : "-"}
-                                </p>
-                              </div>
-                            </div>
-                          ) : (
-                            /* PAKET mode */
-                            <div className="space-y-2">
-                              {/* Package selector if multiple packages */}
-                              {row.packages.length > 1 && (
-                                <div className="flex gap-1 flex-wrap">
-                                  {row.packages.map((pkg) => (
-                                    <button
-                                      key={pkg.id}
-                                      type="button"
-                                      onClick={() =>
-                                        setSelectedPkg(idx, pkg.id)
-                                      }
-                                      className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition-colors ${
-                                        row.selectedPkgId === pkg.id
-                                          ? "border-blue-500 bg-blue-50 text-blue-700"
-                                          : "border-slate-300 text-slate-600 hover:border-blue-400"
-                                      }`}
-                                    >
-                                      {pkg.label} — {formatRupiah(pkg.hargaPerPackage)}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
+                        {/* Exhausted overlay message */}
+                        {isExhausted && (
+                          <div className="px-3 py-2.5 bg-slate-50 text-xs text-slate-500 italic flex items-center gap-2">
+                            <Lock className="w-3.5 h-3.5" /> Batas pembelian untuk material ini sudah tercapai.
+                          </div>
+                        )}
 
-                              {/* Single package info + qty */}
-                              <div className="flex items-center gap-3">
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs text-slate-600 font-medium">
-                                    {activePkg?.label}
-                                  </p>
-                                  <p className="text-xs text-slate-400">
-                                    {formatRupiah(
-                                      activePkg?.hargaPerPackage ?? 0
-                                    )}{" "}
-                                    / paket · berisi{" "}
-                                    {activePkg?.qtyPerPackage}{" "}
-                                    {row.satuan}
-                                  </p>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs text-slate-500">
-                                    × Paket
+                        {/* Mode toggle + input (hidden when exhausted) */}
+                        {!isExhausted && (
+                          <>
+                            {/* Mode toggle */}
+                            {hasPkgs && (
+                              <div className="flex gap-1 px-3 pb-2 bg-slate-50 border-b border-slate-200">
+                                <button type="button" onClick={() => setMode(idx, "paket")} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${row.mode === "paket" ? "bg-blue-700 text-white" : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"}`}>
+                                  <Package className="w-3.5 h-3.5" /> Beli Paket
+                                </button>
+                                <button type="button" onClick={() => setMode(idx, "satuan")} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${row.mode === "satuan" ? "bg-blue-700 text-white" : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"}`}>
+                                  <Layers className="w-3.5 h-3.5" /> Beli Satuan
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Input area */}
+                            <div className="px-3 py-2.5 bg-white">
+                              {row.mode === "satuan" || !hasPkgs ? (
+                                <div className="flex items-center gap-3">
+                                  <span className="text-xs text-slate-500 flex-1">
+                                    Jumlah ({row.satuan})
+                                    {isLimited && <span className="text-blue-600 ml-1">· maks {remaining}</span>}
                                   </span>
                                   <input
                                     type="number"
                                     min="0"
-                                    value={row.pkgCount || ""}
-                                    onChange={(e) =>
-                                      setPkgCount(idx, e.target.value)
-                                    }
-                                    className="w-20 text-center border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                    max={isLimited ? remaining : undefined}
+                                    value={row.satuanJumlah || ""}
+                                    onChange={(e) => setSatuanJumlah(idx, e.target.value)}
+                                    className={`w-24 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${isOverLimit ? "border-red-400 bg-red-50" : "border-slate-300"}`}
                                     placeholder="0"
                                   />
-                                </div>
-                                <div className="w-28 text-right">
-                                  <p className="text-sm font-semibold text-slate-700">
-                                    {row.pkgCount > 0
-                                      ? formatRupiah(
-                                          row.pkgCount *
-                                            (activePkg?.hargaPerPackage ?? 0)
-                                        )
-                                      : "-"}
-                                  </p>
-                                  {row.pkgCount > 0 && activePkg && (
-                                    <p className="text-xs text-slate-400">
-                                      ={" "}
-                                      {row.pkgCount *
-                                        activePkg.qtyPerPackage}{" "}
-                                      {row.satuan}
+                                  <div className="w-28 text-right">
+                                    <p className="text-sm font-semibold text-slate-700">
+                                      {row.satuanJumlah > 0 ? formatRupiah(row.satuanJumlah * row.hargaPerPcs) : "-"}
                                     </p>
-                                  )}
+                                  </div>
                                 </div>
-                              </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {row.packages.length > 1 && (
+                                    <div className="flex gap-1 flex-wrap">
+                                      {row.packages.map((pkg) => (
+                                        <button
+                                          key={pkg.id}
+                                          type="button"
+                                          onClick={() => setSelectedPkg(idx, pkg.id)}
+                                          className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition-colors ${row.selectedPkgId === pkg.id ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 text-slate-600 hover:border-blue-400"}`}
+                                        >
+                                          {pkg.label} — {formatRupiah(pkg.hargaPerPackage)}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs text-slate-600 font-medium">{activePkg?.label}</p>
+                                      <p className="text-xs text-slate-400">
+                                        {formatRupiah(activePkg?.hargaPerPackage ?? 0)} / paket · berisi {activePkg?.qtyPerPackage} {row.satuan}
+                                        {isLimited && activePkg && (
+                                          <span className="text-blue-600 ml-1">
+                                            · maks {Math.floor(remaining / activePkg.qtyPerPackage)} paket
+                                          </span>
+                                        )}
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-xs text-slate-500">× Paket</span>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={
+                                          isLimited && activePkg
+                                            ? Math.floor(remaining / activePkg.qtyPerPackage)
+                                            : undefined
+                                        }
+                                        value={row.pkgCount || ""}
+                                        onChange={(e) => setPkgCount(idx, e.target.value)}
+                                        className={`w-20 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${isOverLimit ? "border-red-400 bg-red-50" : "border-slate-300"}`}
+                                        placeholder="0"
+                                      />
+                                    </div>
+                                    <div className="w-28 text-right">
+                                      <p className="text-sm font-semibold text-slate-700">
+                                        {row.pkgCount > 0 ? formatRupiah(row.pkgCount * (activePkg?.hargaPerPackage ?? 0)) : "-"}
+                                      </p>
+                                      {row.pkgCount > 0 && activePkg && (
+                                        <p className="text-xs text-slate-400">= {row.pkgCount * activePkg.qtyPerPackage} {row.satuan}</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -658,55 +670,62 @@ export default function TeamPage() {
                   </div>
                   <div className="flex justify-between text-sm text-slate-600 mb-1">
                     <span>Akumulasi sebelumnya:</span>
-                    <span className="font-semibold">
-                      {formatRupiah(prevTotal)}
-                    </span>
+                    <span className="font-semibold">{formatRupiah(prevTotal)}</span>
                   </div>
-                  <div
-                    className={`flex justify-between font-bold text-base mt-2 pt-2 border-t border-slate-200 ${
-                      runningTotal > totalPendapatan && totalPendapatan > 0
-                        ? "text-red-600"
-                        : "text-slate-800"
-                    }`}
-                  >
+                  <div className={`flex justify-between font-bold text-base mt-2 pt-2 border-t border-slate-200 ${runningTotal > totalPendapatan && totalPendapatan > 0 ? "text-red-600" : "text-slate-800"}`}>
                     <span>Total akumulasi:</span>
                     <span>{formatRupiah(runningTotal)}</span>
                   </div>
+
+                  {/* Warnings */}
                   {totalPendapatan === 0 && (
                     <div className="mt-2 flex items-center gap-2 text-orange-600 text-xs">
                       <AlertTriangle className="w-4 h-4" />
-                      Belum ada anggaran yang diterima. Hubungi panitia untuk
-                      konfirmasi pembayaran.
+                      Belum ada anggaran yang diterima. Hubungi panitia untuk konfirmasi pembayaran.
                     </div>
                   )}
-                  {totalPendapatan > 0 &&
-                    runningTotal > totalPendapatan && (
-                      <div className="mt-2 flex items-center gap-2 text-red-600 text-xs">
-                        <AlertTriangle className="w-4 h-4" />
-                        Melebihi anggaran yang diterima (
-                        {formatRupiah(totalPendapatan)}) sebesar{" "}
-                        {formatRupiah(runningTotal - totalPendapatan)}
+                  {totalPendapatan > 0 && runningTotal > totalPendapatan && (
+                    <div className="mt-2 flex items-center gap-2 text-red-600 text-xs">
+                      <AlertTriangle className="w-4 h-4" />
+                      Melebihi anggaran yang diterima ({formatRupiah(totalPendapatan)}) sebesar {formatRupiah(runningTotal - totalPendapatan)}
+                    </div>
+                  )}
+
+                  {/* Limit violation warning */}
+                  {hasLimitViolation && (
+                    <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-xl">
+                      <div className="flex items-center gap-2 text-red-700 text-xs font-semibold mb-1">
+                        <ShieldAlert className="w-4 h-4" /> Melebihi batas pembelian:
                       </div>
-                    )}
+                      {limitViolations.map((v, i) => (
+                        <p key={i} className="text-xs text-red-600 ml-6">
+                          {v.namaKomponen}: minta {v.requested} {v.satuan}, sisa {v.remaining} {v.satuan}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <button
                   onClick={handleSubmit}
-                  disabled={submitting}
+                  disabled={submitting || hasLimitViolation}
                   className="btn-primary w-full mt-4 flex items-center justify-center gap-2"
                 >
                   {submitting ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : hasLimitViolation ? (
+                    <ShieldAlert className="w-4 h-4" />
                   ) : (
                     <Lock className="w-4 h-4" />
                   )}
                   {submitting
                     ? "Menyimpan..."
+                    : hasLimitViolation
+                    ? "Kurangi jumlah yang melebihi batas"
                     : `Kunci & Submit Hari ke-${currentHari}`}
                 </button>
                 <p className="text-xs text-slate-400 text-center mt-2">
-                  Boleh submit tanpa pembelian. Data yang sudah disubmit tidak
-                  dapat diubah.
+                  Boleh submit tanpa pembelian. Data yang sudah disubmit tidak dapat diubah.
                 </p>
               </div>
             )}
@@ -717,25 +736,18 @@ export default function TeamPage() {
         {view === "history" && (
           <div className="space-y-3">
             {submissions.length === 0 ? (
-              <div className="card text-center py-8 text-slate-400">
-                Belum ada data yang disubmit
-              </div>
+              <div className="card text-center py-8 text-slate-400">Belum ada data yang disubmit</div>
             ) : (
               submissions.map((sub) => (
                 <div key={sub.id} className="card">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-semibold text-slate-700 flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-slate-400" /> Hari ke-
-                      {sub.hari}
+                      <Lock className="w-4 h-4 text-slate-400" /> Hari ke-{sub.hari}
                     </h3>
-                    <span className="font-bold text-blue-700">
-                      {formatRupiah(sub.totalHari)}
-                    </span>
+                    <span className="font-bold text-blue-700">{formatRupiah(sub.totalHari)}</span>
                   </div>
                   {sub.entries.length === 0 ? (
-                    <p className="text-sm text-slate-400 italic">
-                      Tidak ada pembelian
-                    </p>
+                    <p className="text-sm text-slate-400 italic">Tidak ada pembelian</p>
                   ) : (
                     <div className="space-y-1">
                       {sub.entries.map((e, i) => (
@@ -743,17 +755,11 @@ export default function TeamPage() {
                           <span className="text-slate-600">
                             {e.namaKomponen}{" "}
                             {e.isPackage ? (
-                              <span className="text-blue-500 text-xs font-medium">
-                                [{e.packageLabel}×{e.packageCount}]
-                              </span>
+                              <span className="text-blue-500 text-xs font-medium">[{e.packageLabel}×{e.packageCount}]</span>
                             ) : null}{" "}
-                            <span className="text-slate-400">
-                              ×{e.jumlah} {e.satuan}
-                            </span>
+                            <span className="text-slate-400">×{e.jumlah} {e.satuan}</span>
                           </span>
-                          <span className="text-slate-700">
-                            {formatRupiah(e.totalHarga)}
-                          </span>
+                          <span className="text-slate-700">{formatRupiah(e.totalHarga)}</span>
                         </div>
                       ))}
                     </div>
@@ -771,12 +777,9 @@ export default function TeamPage() {
               <div className="flex items-center gap-3">
                 <CreditCard className="w-7 h-7 text-green-600" />
                 <div>
-                  <h2 className="font-bold text-slate-800">
-                    Status Pembayaran
-                  </h2>
+                  <h2 className="font-bold text-slate-800">Status Pembayaran</h2>
                   <p className="text-xs text-slate-500">
-                    Pembayaran yang lunas menjadi anggaran belanja tim.
-                    Informasikan ke panitia setiap tahap yang sudah dibayarkan.
+                    Pembayaran yang lunas menjadi anggaran belanja tim. Informasikan ke panitia setiap tahap yang sudah dibayarkan.
                   </p>
                 </div>
               </div>
@@ -794,53 +797,27 @@ export default function TeamPage() {
                   </thead>
                   <tbody>
                     {(settings?.paymentStages ?? []).map((stage) => {
-                      const ps = paymentStatuses.find(
-                        (p) => p.stageId === stage.id
-                      );
+                      const ps = paymentStatuses.find((p) => p.stageId === stage.id);
                       const completed = ps?.completed ?? false;
                       const bonus = ps?.bonus ?? 0;
                       const penalty = ps?.penalty ?? 0;
-                      const net =
-                        stage.nominal +
-                        bonus * BONUS_PENALTY_VALUE -
-                        penalty * BONUS_PENALTY_VALUE;
+                      const net = stage.nominal + bonus * BONUS_PENALTY_VALUE - penalty * BONUS_PENALTY_VALUE;
 
                       return (
-                        <tr
-                          key={stage.id}
-                          className={`border-t border-slate-100 ${completed ? "bg-green-50/60" : ""}`}
-                        >
+                        <tr key={stage.id} className={`border-t border-slate-100 ${completed ? "bg-green-50/60" : ""}`}>
                           <td className="px-3 py-2.5">
-                            <p
-                              className={`font-medium ${completed ? "text-green-700" : "text-slate-700"}`}
-                            >
-                              {stage.label}
-                            </p>
+                            <p className={`font-medium ${completed ? "text-green-700" : "text-slate-700"}`}>{stage.label}</p>
                             {(bonus > 0 || penalty > 0) && (
                               <div className="flex gap-1.5 mt-0.5">
-                                {bonus > 0 && (
-                                  <span className="text-xs text-green-600 font-semibold">
-                                    +{bonus}× bonus
-                                  </span>
-                                )}
-                                {penalty > 0 && (
-                                  <span className="text-xs text-red-600 font-semibold">
-                                    -{penalty}× penalti
-                                  </span>
-                                )}
+                                {bonus > 0 && <span className="text-xs text-green-600 font-semibold">+{bonus}× bonus</span>}
+                                {penalty > 0 && <span className="text-xs text-red-600 font-semibold">-{penalty}× penalti</span>}
                               </div>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-right">
-                            <p className="font-medium text-slate-600">
-                              {formatRupiah(stage.nominal)}
-                            </p>
+                            <p className="font-medium text-slate-600">{formatRupiah(stage.nominal)}</p>
                             {(bonus > 0 || penalty > 0) && (
-                              <p
-                                className={`text-xs font-bold ${net > stage.nominal ? "text-green-600" : "text-red-600"}`}
-                              >
-                                → {formatRupiah(net)}
-                              </p>
+                              <p className={`text-xs font-bold ${net > stage.nominal ? "text-green-600" : "text-red-600"}`}>→ {formatRupiah(net)}</p>
                             )}
                           </td>
                           <td className="px-3 py-2.5 text-center">
@@ -849,9 +826,7 @@ export default function TeamPage() {
                                 <CheckCircle className="w-3 h-3" /> Lunas
                               </span>
                             ) : (
-                              <span className="inline-flex text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
-                                Belum
-                              </span>
+                              <span className="inline-flex text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full">Belum</span>
                             )}
                           </td>
                         </tr>
@@ -860,13 +835,8 @@ export default function TeamPage() {
                   </tbody>
                   <tfoot className="border-t-2 border-slate-200 bg-slate-50">
                     <tr>
-                      <td className="px-3 py-2.5 font-bold text-slate-700">
-                        TOTAL ANGGARAN
-                      </td>
-                      <td
-                        colSpan={2}
-                        className="px-3 py-2.5 text-right font-bold text-green-700 text-base"
-                      >
+                      <td className="px-3 py-2.5 font-bold text-slate-700">TOTAL ANGGARAN</td>
+                      <td colSpan={2} className="px-3 py-2.5 text-right font-bold text-green-700 text-base">
                         {formatRupiah(totalPendapatan)}
                       </td>
                     </tr>

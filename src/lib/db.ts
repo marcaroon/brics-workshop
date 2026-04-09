@@ -19,6 +19,7 @@ import {
   DailySubmission,
   MaterialItem,
   TeamPaymentStatus,
+  TeamLimits,
 } from "@/types";
 import {
   DEFAULT_MATERIALS,
@@ -213,5 +214,39 @@ export async function setPaymentStatus(
     bonus,
     penalty,
     completedAt: completed ? serverTimestamp() : null,
+  });
+}
+
+// ─── Team Purchase Limits ─────────────────────────────────────────────
+//
+// Stored in collection "teamLimits", one doc per team.
+// Doc ID = teamId.
+// Shape: { workshopId, teamId, limits: { [materialId]: maxQty } }
+// maxQty is in base units (satuan). 0 means unlimited.
+
+export async function getAllTeamLimits(): Promise<TeamLimits[]> {
+  const q = query(
+    collection(db, "teamLimits"),
+    where("workshopId", "==", WORKSHOP_ID),
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => d.data() as TeamLimits);
+}
+
+export async function getTeamLimits(teamId: string): Promise<TeamLimits | null> {
+  const ref = doc(db, "teamLimits", teamId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return snap.data() as TeamLimits;
+}
+
+export async function setTeamLimits(
+  teamId: string,
+  limits: Record<string, number>,
+): Promise<void> {
+  await setDoc(doc(db, "teamLimits", teamId), {
+    workshopId: WORKSHOP_ID,
+    teamId,
+    limits,
   });
 }

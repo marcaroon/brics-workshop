@@ -11,6 +11,8 @@ import {
   getAllPaymentStatuses,
   setPaymentStatus,
   resetAllSubmissions,
+  getAllTeamLimits,
+  setTeamLimits,
 } from "@/lib/db";
 import { uploadToCloudinary } from "@/lib/cloudinary";
 import {
@@ -22,6 +24,7 @@ import {
   MaterialItem,
   PackageOption,
   PaymentStage,
+  TeamLimits,
 } from "@/types";
 import { formatRupiah, getSpendingStatus } from "@/lib/utils";
 import { exportRekapCSV } from "@/lib/exportExcel";
@@ -47,20 +50,25 @@ import {
   CheckCircle,
   Circle,
   GripVertical,
-  Image,
   X,
   Upload,
   CloudOff,
   RotateCcw,
   Tag,
+  ShieldAlert,
+  Infinity,
 } from "lucide-react";
 
-type Tab = "monitor" | "payments" | "leaderboard" | "teams" | "settings";
+type Tab = "monitor" | "payments" | "leaderboard" | "teams" | "limits" | "settings";
 
 interface DragState {
   draggingIdx: number | null;
   overIdx: number | null;
 }
+
+// ─── Local edit state for limits tab ──────────────────────────────────
+// Map: teamId → { materialId → maxQty string (for input binding) }
+type LimitsEditState = Record<string, Record<string, string>>;
 
 export default function AdminPage() {
   const router = useRouter();
@@ -71,6 +79,7 @@ export default function AdminPage() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [summaries, setSummaries] = useState<TeamSummary[]>([]);
   const [allPaymentStatuses, setAllPaymentStatuses] = useState<TeamPaymentStatus[]>([]);
+  const [allTeamLimits, setAllTeamLimits] = useState<TeamLimits[]>([]);
   const [expandedTeam, setExpandedTeam] = useState<string | null>(null);
   const [newTeamName, setNewTeamName] = useState("");
   const [addingTeam, setAddingTeam] = useState(false);
@@ -79,6 +88,11 @@ export default function AdminPage() {
   const [savingPayment, setSavingPayment] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [expandedPackageIdx, setExpandedPackageIdx] = useState<number | null>(null);
+
+  // Limits tab state
+  const [limitsEdit, setLimitsEdit] = useState<LimitsEditState>({});
+  const [savingLimits, setSavingLimits] = useState<string | null>(null); // teamId being saved
+  const [limitsSelectedTeam, setLimitsSelectedTeam] = useState<string | null>(null);
 
   const [drag, setDrag] = useState<DragState>({ draggingIdx: null, overIdx: null });
   const [uploadState, setUploadState] = useState<Record<number, "uploading" | "done" | "error">>({});
@@ -91,16 +105,18 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [ws, t, allSubs, allPay] = await Promise.all([
+      const [ws, t, allSubs, allPay, allLimits] = await Promise.all([
         getWorkshopSettings(),
         getTeams(),
         getAllSubmissions(),
         getAllPaymentStatuses(),
+        getAllTeamLimits(),
       ]);
       if (!ws) { router.push("/"); return; }
       setSettings(ws);
       setTeams(t);
       setAllPaymentStatuses(allPay);
+      setAllTeamLimits(allLimits);
       setSettingsForm({
         namaWorkshop: ws.namaWorkshop,
         jumlahHari: ws.jumlahHari,
@@ -115,6 +131,21 @@ export default function AdminPage() {
         paymentStages: ws.paymentStages?.map((p) => ({ ...p })) ?? [],
       });
       setSummaries(buildSummaries(t, allSubs, allPay, ws));
+
+      // Build local limitsEdit from fetched data
+      const editState: LimitsEditState = {};
+      t.forEach((team) => {
+        const tl = allLimits.find((l) => l.teamId === team.id);
+        editState[team.id] = {};
+        ws.materials.forEach((m) => {
+          const val = tl?.limits?.[m.id] ?? 0;
+          editState[team.id][m.id] = val === 0 ? "" : String(val);
+        });
+      });
+      setLimitsEdit(editState);
+      if (t.length > 0 && !limitsSelectedTeam) {
+        setLimitsSelectedTeam(t[0].id);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -352,6 +383,45 @@ export default function AdminPage() {
 
   function removeMaterialImage(idx: number) { updateMaterialDirect(idx, "imageUrl", ""); }
 
+  // ─── Limits handlers ──────────────────────────────────────────────
+
+  function setLimitValue(teamId: string, materialId: string, val: string) {
+    // Only allow non-negative integers or empty string
+    if (val !== "" && !/^\d+$/.test(val)) return;
+    setLimitsEdit((prev) => ({
+      ...prev,
+      [teamId]: { ...prev[teamId], [materialId]: val },
+    }));
+  }
+
+  async function handleSaveLimits(teamId: string) {
+    setSavingLimits(teamId);
+    const raw = limitsEdit[teamId] ?? {};
+    const limits: Record<string, number> = {};
+    Object.entries(raw).forEach(([matId, val]) => {
+      limits[matId] = val === "" ? 0 : Number(val);
+    });
+    await setTeamLimits(teamId, limits);
+    await load();
+    setSavingLimits(null);
+  }
+
+  function handleCopyLimits(fromTeamId: string, toTeamId: string) {
+    const source = limitsEdit[fromTeamId] ?? {};
+    setLimitsEdit((prev) => ({
+      ...prev,
+      [toTeamId]: { ...source },
+    }));
+  }
+
+  function handleClearLimits(teamId: string) {
+    setLimitsEdit((prev) => {
+      const cleared: Record<string, string> = {};
+      Object.keys(prev[teamId] ?? {}).forEach((k) => { cleared[k] = ""; });
+      return { ...prev, [teamId]: cleared };
+    });
+  }
+
   // ─── Render ───────────────────────────────────────────────────────
 
   if (loading) {
@@ -370,10 +440,14 @@ export default function AdminPage() {
     { key: "payments", label: "Pembayaran", icon: CreditCard },
     { key: "leaderboard", label: "Leaderboard", icon: Trophy },
     { key: "teams", label: "Kelola Tim", icon: Users },
+    { key: "limits", label: "Batas Pembelian", icon: ShieldAlert },
     { key: "settings", label: "Pengaturan", icon: Settings },
   ];
 
   const totalSubmissions = summaries.reduce((s, t) => s + t.submissions.length, 0);
+  const sortedMaterials = settings
+    ? [...settings.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    : [];
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -445,6 +519,8 @@ export default function AdminPage() {
                 const keuntungan = totalPendapatan - totalPengeluaran;
                 const stagesCompleted = summary.paymentStatuses.filter((p) => p.completed).length;
                 const totalStages = settings?.paymentStages?.length ?? 0;
+                const teamLimitDoc = allTeamLimits.find((l) => l.teamId === team.id);
+                const hasLimits = teamLimitDoc && Object.values(teamLimitDoc.limits ?? {}).some((v) => v > 0);
 
                 return (
                   <div key={team.id} className="card">
@@ -453,7 +529,14 @@ export default function AdminPage() {
                         <div className="w-11 h-11 rounded-xl bg-blue-100 text-blue-700 font-bold text-lg flex items-center justify-center flex-shrink-0">{teamIdx + 1}</div>
                         <div className="flex-1 text-left">
                           <div className="flex items-center justify-between">
-                            <p className="font-bold text-slate-800">{team.namaTeam}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="font-bold text-slate-800">{team.namaTeam}</p>
+                              {hasLimits && (
+                                <span className="flex items-center gap-1 text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-semibold">
+                                  <ShieldAlert className="w-3 h-3" /> Ada batas
+                                </span>
+                              )}
+                            </div>
                             <div className="flex items-center gap-2">
                               <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${status.bg} ${status.color}`}>{status.label}</span>
                               {isExpanded ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
@@ -539,21 +622,31 @@ export default function AdminPage() {
                                   <tr className="text-left text-slate-500">
                                     <th className="px-3 py-2">Komponen</th>
                                     <th className="px-3 py-2 text-right">Total Qty</th>
+                                    <th className="px-3 py-2 text-right">Batas</th>
                                     <th className="px-3 py-2 text-right">Total Biaya</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {Object.values(totalPerMaterial).map((m, i) => (
-                                    <tr key={i} className="border-t border-slate-100">
-                                      <td className="px-3 py-2 text-slate-700">{m.nama}</td>
-                                      <td className="px-3 py-2 text-right text-slate-600">{m.jumlah} {m.satuan}</td>
-                                      <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatRupiah(m.total)}</td>
-                                    </tr>
-                                  ))}
+                                  {Object.entries(totalPerMaterial).map(([matId, m], i) => {
+                                    const limit = teamLimitDoc?.limits?.[matId] ?? 0;
+                                    const overLimit = limit > 0 && m.jumlah > limit;
+                                    return (
+                                      <tr key={i} className={`border-t border-slate-100 ${overLimit ? "bg-red-50" : ""}`}>
+                                        <td className="px-3 py-2 text-slate-700">{m.nama}</td>
+                                        <td className={`px-3 py-2 text-right font-semibold ${overLimit ? "text-red-600" : "text-slate-600"}`}>
+                                          {m.jumlah} {m.satuan}
+                                        </td>
+                                        <td className="px-3 py-2 text-right text-slate-400">
+                                          {limit > 0 ? `maks ${limit}` : "—"}
+                                        </td>
+                                        <td className="px-3 py-2 text-right font-semibold text-slate-700">{formatRupiah(m.total)}</td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                                 <tfoot className="bg-slate-50 border-t-2 border-slate-200">
                                   <tr>
-                                    <td className="px-3 py-2 font-bold text-slate-700" colSpan={2}>TOTAL</td>
+                                    <td className="px-3 py-2 font-bold text-slate-700" colSpan={3}>TOTAL</td>
                                     <td className="px-3 py-2 text-right font-bold text-blue-700">{formatRupiah(totalPengeluaran)}</td>
                                   </tr>
                                 </tfoot>
@@ -730,6 +823,228 @@ export default function AdminPage() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ═══ BATAS PEMBELIAN ═══ */}
+        {tab === "limits" && (
+          <div className="space-y-4">
+            {/* Info card */}
+            <div className="card bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="w-7 h-7 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h2 className="font-bold text-slate-800">Batas Pembelian per Tim</h2>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Atur jumlah maksimal pembelian (dalam satuan dasar) per material untuk setiap tim.
+                    Batas berlaku secara kumulatif — dijumlahkan dari seluruh hari.
+                    Kosongkan atau isi <strong>0</strong> untuk tidak membatasi item tersebut.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {teams.length === 0 ? (
+              <div className="card text-center py-12 text-slate-400">
+                <Users className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p>Belum ada tim. Buat tim di tab "Kelola Tim" terlebih dahulu.</p>
+              </div>
+            ) : (
+              <>
+                {/* Team selector */}
+                <div className="flex gap-2 flex-wrap">
+                  {teams.map((team) => (
+                    <button
+                      key={team.id}
+                      onClick={() => setLimitsSelectedTeam(team.id)}
+                      className={`px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-colors ${
+                        limitsSelectedTeam === team.id
+                          ? "border-blue-600 bg-blue-600 text-white"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-blue-400"
+                      }`}
+                    >
+                      {team.namaTeam}
+                    </button>
+                  ))}
+                </div>
+
+                {limitsSelectedTeam && (() => {
+                  const selectedTeam = teams.find((t) => t.id === limitsSelectedTeam)!;
+                  const teamEdit = limitsEdit[limitsSelectedTeam] ?? {};
+                  const isSaving = savingLimits === limitsSelectedTeam;
+                  const activeCount = Object.values(teamEdit).filter((v) => v !== "" && v !== "0").length;
+                  const teamSummary = summaries.find((s) => s.team.id === limitsSelectedTeam);
+
+                  return (
+                    <div className="card space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="font-bold text-slate-800 text-lg">{selectedTeam.namaTeam}</h3>
+                          <p className="text-xs text-slate-500">
+                            {activeCount > 0
+                              ? `${activeCount} material dibatasi`
+                              : "Semua material tidak dibatasi"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {/* Copy from another team */}
+                          {teams.filter((t) => t.id !== limitsSelectedTeam).length > 0 && (
+                            <div className="relative group">
+                              <button className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:border-blue-400 hover:text-blue-600 transition-colors">
+                                Salin dari tim lain ▾
+                              </button>
+                              <div className="absolute right-0 top-8 z-20 bg-white border border-slate-200 rounded-xl shadow-lg min-w-36 py-1 hidden group-hover:block">
+                                {teams
+                                  .filter((t) => t.id !== limitsSelectedTeam)
+                                  .map((t) => (
+                                    <button
+                                      key={t.id}
+                                      onClick={() => handleCopyLimits(t.id, limitsSelectedTeam)}
+                                      className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+                                    >
+                                      {t.namaTeam}
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => handleClearLimits(limitsSelectedTeam)}
+                            className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:border-red-400 hover:text-red-600 transition-colors"
+                          >
+                            Hapus semua batas
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Material limits table */}
+                      <div className="overflow-x-auto rounded-xl border border-slate-200">
+                        <table className="w-full text-sm">
+                          <thead className="bg-slate-50">
+                            <tr className="text-left text-slate-500 text-xs">
+                              <th className="px-3 py-2.5">#</th>
+                              <th className="px-3 py-2.5">Material / SDM</th>
+                              <th className="px-3 py-2.5 text-center">Satuan</th>
+                              <th className="px-3 py-2.5 text-center w-32">Sudah Dibeli</th>
+                              <th className="px-3 py-2.5 text-center w-36">Maks. Pembelian</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sortedMaterials.map((mat, i) => {
+                              const val = teamEdit[mat.id] ?? "";
+                              const maxQty = val === "" ? 0 : Number(val);
+                              const boughtQty = teamSummary?.totalPerMaterial[mat.id]?.jumlah ?? 0;
+                              const isLimited = maxQty > 0;
+                              const isOver = isLimited && boughtQty > maxQty;
+                              const isNearLimit = isLimited && !isOver && boughtQty > 0 && boughtQty / maxQty >= 0.8;
+
+                              return (
+                                <tr
+                                  key={mat.id}
+                                  className={`border-t border-slate-100 ${
+                                    isOver ? "bg-red-50" : isNearLimit ? "bg-amber-50" : ""
+                                  }`}
+                                >
+                                  <td className="px-3 py-2.5 text-slate-400 text-xs">{i + 1}</td>
+                                  <td className="px-3 py-2.5">
+                                    <div className="flex items-center gap-2">
+                                      {mat.imageUrl && (
+                                        <img src={mat.imageUrl} alt={mat.namaKomponen} className="w-7 h-7 rounded-lg object-cover border border-slate-200 flex-shrink-0" />
+                                      )}
+                                      <span className={`font-medium ${isLimited ? "text-slate-800" : "text-slate-500"}`}>
+                                        {mat.namaKomponen}
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="px-3 py-2.5 text-center text-slate-500 text-xs">{mat.satuan}</td>
+                                  <td className="px-3 py-2.5 text-center">
+                                    {boughtQty > 0 ? (
+                                      <span className={`text-xs font-semibold ${isOver ? "text-red-600" : isNearLimit ? "text-amber-600" : "text-slate-600"}`}>
+                                        {boughtQty}
+                                        {isOver && " ⚠️"}
+                                      </span>
+                                    ) : (
+                                      <span className="text-xs text-slate-300">—</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-center">
+                                    <div className="flex items-center justify-center gap-1.5">
+                                      <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={val}
+                                        onChange={(e) => setLimitValue(limitsSelectedTeam, mat.id, e.target.value)}
+                                        placeholder="∞"
+                                        className={`w-20 text-center border rounded-lg px-2 py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
+                                          isLimited
+                                            ? "border-blue-400 bg-blue-50 text-blue-800 font-semibold"
+                                            : "border-slate-300 text-slate-500"
+                                        }`}
+                                      />
+                                      {!isLimited && (
+                                        <Infinity className="w-4 h-4 text-slate-300 flex-shrink-0" />
+                                      )}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Progress bars for limited materials */}
+                      {activeCount > 0 && (
+                        <div className="space-y-2">
+                          <p className="text-xs font-semibold text-slate-600">Progress Pemakaian</p>
+                          {sortedMaterials
+                            .filter((mat) => {
+                              const v = teamEdit[mat.id] ?? "";
+                              return v !== "" && v !== "0";
+                            })
+                            .map((mat) => {
+                              const maxQty = Number(teamEdit[mat.id]);
+                              const boughtQty = teamSummary?.totalPerMaterial[mat.id]?.jumlah ?? 0;
+                              const pct = Math.min((boughtQty / maxQty) * 100, 100);
+                              const isOver = boughtQty > maxQty;
+                              return (
+                                <div key={mat.id}>
+                                  <div className="flex justify-between text-xs text-slate-600 mb-0.5">
+                                    <span className="font-medium truncate max-w-48">{mat.namaKomponen}</span>
+                                    <span className={`font-semibold flex-shrink-0 ml-2 ${isOver ? "text-red-600" : "text-slate-700"}`}>
+                                      {boughtQty} / {maxQty} {mat.satuan}
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full transition-all ${isOver ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                        <p className="text-xs text-slate-400">
+                          Perubahan langsung berlaku. Tim tidak bisa submit jika melebihi batas.
+                        </p>
+                        <button
+                          onClick={() => handleSaveLimits(limitsSelectedTeam)}
+                          disabled={isSaving}
+                          className="btn-primary flex items-center gap-2"
+                        >
+                          {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          {isSaving ? "Menyimpan..." : "Simpan Batas"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </>
+            )}
           </div>
         )}
 

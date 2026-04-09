@@ -32,6 +32,18 @@ export interface TeamPaymentStatus {
   penalty: number;
 }
 
+/**
+ * Purchase limits per team.
+ * Stored as a map: materialId → maxQty (in base units, i.e. satuan).
+ * A value of 0 or undefined means unlimited.
+ * Stored in Firestore as collection "teamLimits", doc id = teamId.
+ */
+export interface TeamLimits {
+  teamId: string;
+  workshopId: string;
+  limits: Record<string, number>; // materialId → maxQty (0 = unlimited)
+}
+
 export interface WorkshopSettings {
   id: string;
   namaWorkshop: string;
