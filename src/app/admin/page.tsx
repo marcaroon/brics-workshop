@@ -56,7 +56,6 @@ import {
   RotateCcw,
   Tag,
   ShieldAlert,
-  Infinity,
 } from "lucide-react";
 
 type Tab = "monitor" | "payments" | "leaderboard" | "teams" | "limits" | "settings";
@@ -836,9 +835,9 @@ export default function AdminPage() {
                 <div>
                   <h2 className="font-bold text-slate-800">Batas Pembelian per Tim</h2>
                   <p className="text-xs text-slate-600 mt-1">
-                    Atur jumlah maksimal pembelian (dalam satuan dasar) per material untuk setiap tim.
-                    Batas berlaku secara kumulatif — dijumlahkan dari seluruh hari.
-                    Kosongkan atau isi <strong>0</strong> untuk tidak membatasi item tersebut.
+                    Batas berlaku kumulatif untuk seluruh hari dan dihitung dalam satuan dasar — baik pembelian satuan maupun paket.
+                    Untuk material berpaket, atur batas langsung dalam jumlah paket menggunakan tombol <strong>− / +</strong>, atau ketik jumlah satuan secara manual.
+                    Biarkan kosong berarti tidak ada batas.
                   </p>
                 </div>
               </div>
@@ -876,35 +875,33 @@ export default function AdminPage() {
                   const teamSummary = summaries.find((s) => s.team.id === limitsSelectedTeam);
 
                   return (
-                    <div className="card space-y-4">
+                    <div className="card space-y-5">
+                      {/* Card header */}
                       <div className="flex items-center justify-between">
                         <div>
                           <h3 className="font-bold text-slate-800 text-lg">{selectedTeam.namaTeam}</h3>
-                          <p className="text-xs text-slate-500">
+                          <p className="text-xs text-slate-500 mt-0.5">
                             {activeCount > 0
-                              ? `${activeCount} material dibatasi`
-                              : "Semua material tidak dibatasi"}
+                              ? `${activeCount} dari ${sortedMaterials.length} material dibatasi`
+                              : "Semua material belum dibatasi"}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          {/* Copy from another team */}
                           {teams.filter((t) => t.id !== limitsSelectedTeam).length > 0 && (
                             <div className="relative group">
                               <button className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:border-blue-400 hover:text-blue-600 transition-colors">
-                                Salin dari tim lain ▾
+                                Salin dari ▾
                               </button>
                               <div className="absolute right-0 top-8 z-20 bg-white border border-slate-200 rounded-xl shadow-lg min-w-36 py-1 hidden group-hover:block">
-                                {teams
-                                  .filter((t) => t.id !== limitsSelectedTeam)
-                                  .map((t) => (
-                                    <button
-                                      key={t.id}
-                                      onClick={() => handleCopyLimits(t.id, limitsSelectedTeam)}
-                                      className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700"
-                                    >
-                                      {t.namaTeam}
-                                    </button>
-                                  ))}
+                                {teams.filter((t) => t.id !== limitsSelectedTeam).map((t) => (
+                                  <button
+                                    key={t.id}
+                                    onClick={() => handleCopyLimits(t.id, limitsSelectedTeam)}
+                                    className="w-full text-left px-3 py-2 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700"
+                                  >
+                                    {t.namaTeam}
+                                  </button>
+                                ))}
                               </div>
                             </div>
                           )}
@@ -912,124 +909,168 @@ export default function AdminPage() {
                             onClick={() => handleClearLimits(limitsSelectedTeam)}
                             className="text-xs px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:border-red-400 hover:text-red-600 transition-colors"
                           >
-                            Hapus semua batas
+                            Reset semua
                           </button>
                         </div>
                       </div>
 
-                      {/* Material limits table */}
-                      <div className="overflow-x-auto rounded-xl border border-slate-200">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50">
-                            <tr className="text-left text-slate-500 text-xs">
-                              <th className="px-3 py-2.5">#</th>
-                              <th className="px-3 py-2.5">Material / SDM</th>
-                              <th className="px-3 py-2.5 text-center">Satuan</th>
-                              <th className="px-3 py-2.5 text-center w-32">Sudah Dibeli</th>
-                              <th className="px-3 py-2.5 text-center w-36">Maks. Pembelian</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sortedMaterials.map((mat, i) => {
-                              const val = teamEdit[mat.id] ?? "";
-                              const maxQty = val === "" ? 0 : Number(val);
-                              const boughtQty = teamSummary?.totalPerMaterial[mat.id]?.jumlah ?? 0;
-                              const isLimited = maxQty > 0;
-                              const isOver = isLimited && boughtQty > maxQty;
-                              const isNearLimit = isLimited && !isOver && boughtQty > 0 && boughtQty / maxQty >= 0.8;
+                      {/* Material rows */}
+                      <div className="divide-y divide-slate-100">
+                        {sortedMaterials.map((mat, i) => {
+                          const val = teamEdit[mat.id] ?? "";
+                          const maxQty = val === "" ? 0 : Number(val);
+                          const boughtQty = teamSummary?.totalPerMaterial[mat.id]?.jumlah ?? 0;
+                          const isLimited = maxQty > 0;
+                          const isOver = isLimited && boughtQty > maxQty;
+                          const isNearLimit = isLimited && !isOver && boughtQty > 0 && boughtQty / maxQty >= 0.8;
+                          const pkgs = mat.packages ?? [];
+                          // Use the first (primary) package for the stepper
+                          const primaryPkg = pkgs[0] ?? null;
+                          const stepSize = primaryPkg?.qtyPerPackage ?? 1;
+                          // How many "steps" (packages) does the current limit represent?
+                          const currentPkgCount = primaryPkg && maxQty > 0 && maxQty % stepSize === 0
+                            ? maxQty / stepSize
+                            : null;
+                          // Package equiv label for the current limit
+                          const pkgEquivLabel = currentPkgCount !== null && primaryPkg
+                            ? `= ${currentPkgCount} ${primaryPkg.label}`
+                            : null;
 
-                              return (
-                                <tr
-                                  key={mat.id}
-                                  className={`border-t border-slate-100 ${
-                                    isOver ? "bg-red-50" : isNearLimit ? "bg-amber-50" : ""
-                                  }`}
-                                >
-                                  <td className="px-3 py-2.5 text-slate-400 text-xs">{i + 1}</td>
-                                  <td className="px-3 py-2.5">
-                                    <div className="flex items-center gap-2">
-                                      {mat.imageUrl && (
-                                        <img src={mat.imageUrl} alt={mat.namaKomponen} className="w-7 h-7 rounded-lg object-cover border border-slate-200 flex-shrink-0" />
+                          return (
+                            <div key={mat.id} className={`py-3 first:pt-0 last:pb-0 ${isOver ? "bg-red-50 -mx-6 px-6 rounded-xl" : ""}`}>
+                              <div className="flex items-start gap-3">
+                                {/* Index + image */}
+                                <div className="flex items-center gap-2 flex-shrink-0 pt-0.5">
+                                  <span className="text-xs text-slate-400 w-4 text-right">{i + 1}</span>
+                                  {mat.imageUrl
+                                    ? <img src={mat.imageUrl} alt={mat.namaKomponen} className="w-8 h-8 rounded-lg object-cover border border-slate-200" />
+                                    : <div className="w-8 h-8 rounded-lg bg-slate-100 flex-shrink-0" />
+                                  }
+                                </div>
+
+                                {/* Name + status */}
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-semibold text-slate-800 truncate">{mat.namaKomponen}</p>
+                                  {isLimited ? (
+                                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                      <span className={`text-xs font-medium ${isOver ? "text-red-600" : isNearLimit ? "text-amber-600" : "text-slate-500"}`}>
+                                        Dibeli: {boughtQty} / {maxQty} {mat.satuan}
+                                        {isOver && " — melebihi batas!"}
+                                        {isNearLimit && " — hampir habis"}
+                                      </span>
+                                      {pkgEquivLabel && (
+                                        <span className="text-xs text-blue-600 font-medium bg-blue-50 px-1.5 py-0.5 rounded">
+                                          {pkgEquivLabel}
+                                        </span>
                                       )}
-                                      <span className={`font-medium ${isLimited ? "text-slate-800" : "text-slate-500"}`}>
-                                        {mat.namaKomponen}
-                                      </span>
                                     </div>
-                                  </td>
-                                  <td className="px-3 py-2.5 text-center text-slate-500 text-xs">{mat.satuan}</td>
-                                  <td className="px-3 py-2.5 text-center">
-                                    {boughtQty > 0 ? (
-                                      <span className={`text-xs font-semibold ${isOver ? "text-red-600" : isNearLimit ? "text-amber-600" : "text-slate-600"}`}>
-                                        {boughtQty}
-                                        {isOver && " ⚠️"}
-                                      </span>
-                                    ) : (
-                                      <span className="text-xs text-slate-300">—</span>
-                                    )}
-                                  </td>
-                                  <td className="px-3 py-2.5 text-center">
-                                    <div className="flex items-center justify-center gap-1.5">
+                                  ) : (
+                                    <p className="text-xs text-slate-400 mt-0.5">Tidak dibatasi</p>
+                                  )}
+
+                                  {/* Progress bar (only when limited) */}
+                                  {isLimited && (
+                                    <div className="mt-1.5 w-full bg-slate-200 rounded-full h-1">
+                                      <div
+                                        className={`h-1 rounded-full transition-all ${isOver ? "bg-red-500" : isNearLimit ? "bg-amber-500" : "bg-blue-500"}`}
+                                        style={{ width: `${Math.min((boughtQty / maxQty) * 100, 100)}%` }}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Controls */}
+                                <div className="flex-shrink-0 flex flex-col items-end gap-1.5">
+                                  {/* If material has packages: show a package stepper + raw pcs input */}
+                                  {primaryPkg ? (
+                                    <div className="flex flex-col items-end gap-1">
+                                      {/* Package stepper */}
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-xs text-slate-500 mr-1">{primaryPkg.label}:</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const cur = maxQty;
+                                            const next = Math.max(0, cur - stepSize);
+                                            setLimitValue(limitsSelectedTeam, mat.id, next === 0 ? "" : String(next));
+                                          }}
+                                          disabled={maxQty === 0}
+                                          className="w-7 h-7 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm flex items-center justify-center disabled:opacity-30 transition-colors"
+                                        >−</button>
+                                        <span className={`w-8 text-center text-sm font-bold ${currentPkgCount !== null ? "text-blue-700" : "text-slate-400"}`}>
+                                          {currentPkgCount ?? "—"}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const cur = maxQty;
+                                            // If current isn't a clean multiple, round up to next multiple first
+                                            const next = cur === 0
+                                              ? stepSize
+                                              : cur % stepSize === 0
+                                              ? cur + stepSize
+                                              : Math.ceil(cur / stepSize) * stepSize;
+                                            setLimitValue(limitsSelectedTeam, mat.id, String(next));
+                                          }}
+                                          className="w-7 h-7 rounded-lg bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold text-sm flex items-center justify-center transition-colors"
+                                        >+</button>
+                                      </div>
+                                      {/* Raw pcs override input */}
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-xs text-slate-400">atau</span>
+                                        <input
+                                          type="text"
+                                          inputMode="numeric"
+                                          value={val}
+                                          onChange={(e) => setLimitValue(limitsSelectedTeam, mat.id, e.target.value)}
+                                          placeholder="bebas"
+                                          className={`w-16 text-center border rounded-lg px-1.5 py-1 text-xs focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
+                                            isLimited
+                                              ? "border-blue-400 bg-blue-50 text-blue-800 font-semibold"
+                                              : "border-slate-300 text-slate-400"
+                                          }`}
+                                        />
+                                        <span className="text-xs text-slate-400">{mat.satuan}</span>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    /* No packages: just a plain pcs input */
+                                    <div className="flex items-center gap-1.5">
                                       <input
                                         type="text"
                                         inputMode="numeric"
                                         value={val}
                                         onChange={(e) => setLimitValue(limitsSelectedTeam, mat.id, e.target.value)}
-                                        placeholder="∞"
-                                        className={`w-20 text-center border rounded-lg px-2 py-1 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
+                                        placeholder="Bebas"
+                                        className={`w-20 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors ${
                                           isLimited
                                             ? "border-blue-400 bg-blue-50 text-blue-800 font-semibold"
                                             : "border-slate-300 text-slate-500"
                                         }`}
                                       />
-                                      {!isLimited && (
-                                        <Infinity className="w-4 h-4 text-slate-300 flex-shrink-0" />
-                                      )}
+                                      <span className="text-xs text-slate-500">{mat.satuan}</span>
                                     </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                                  )}
+                                  {/* Clear limit link */}
+                                  {isLimited && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setLimitValue(limitsSelectedTeam, mat.id, "")}
+                                      className="text-xs text-slate-400 hover:text-red-500 transition-colors"
+                                    >
+                                      Hapus batas
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
 
-                      {/* Progress bars for limited materials */}
-                      {activeCount > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold text-slate-600">Progress Pemakaian</p>
-                          {sortedMaterials
-                            .filter((mat) => {
-                              const v = teamEdit[mat.id] ?? "";
-                              return v !== "" && v !== "0";
-                            })
-                            .map((mat) => {
-                              const maxQty = Number(teamEdit[mat.id]);
-                              const boughtQty = teamSummary?.totalPerMaterial[mat.id]?.jumlah ?? 0;
-                              const pct = Math.min((boughtQty / maxQty) * 100, 100);
-                              const isOver = boughtQty > maxQty;
-                              return (
-                                <div key={mat.id}>
-                                  <div className="flex justify-between text-xs text-slate-600 mb-0.5">
-                                    <span className="font-medium truncate max-w-48">{mat.namaKomponen}</span>
-                                    <span className={`font-semibold flex-shrink-0 ml-2 ${isOver ? "text-red-600" : "text-slate-700"}`}>
-                                      {boughtQty} / {maxQty} {mat.satuan}
-                                    </span>
-                                  </div>
-                                  <div className="w-full bg-slate-200 rounded-full h-1.5">
-                                    <div
-                                      className={`h-1.5 rounded-full transition-all ${isOver ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
-                                      style={{ width: `${pct}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            })}
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                         <p className="text-xs text-slate-400">
-                          Perubahan langsung berlaku. Tim tidak bisa submit jika melebihi batas.
+                          Batas berlaku setelah disimpan. Tim tidak bisa submit jika melebihi batas.
                         </p>
                         <button
                           onClick={() => handleSaveLimits(limitsSelectedTeam)}

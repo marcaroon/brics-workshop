@@ -511,32 +511,68 @@ export default function TeamPage() {
                             {rowAmt > 0 && (
                               <span className="text-sm font-bold text-blue-700">{formatRupiah(rowAmt)}</span>
                             )}
-                            {/* Limit badge */}
-                            {isLimited && (
-                              <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                                isExhausted
-                                  ? "bg-slate-200 text-slate-500"
-                                  : isOverLimit
-                                  ? "bg-red-100 text-red-700"
-                                  : remaining <= maxQty * 0.2
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-blue-100 text-blue-700"
-                              }`}>
-                                <ShieldAlert className="w-3 h-3" />
-                                {isExhausted
-                                  ? "Habis"
-                                  : `Sisa ${remaining} ${row.satuan}`}
-                              </span>
-                            )}
+                            {/* Limit badge — shows pcs remaining AND package equivalent */}
+                            {isLimited && (() => {
+                              // Find the "smallest" package that divides evenly into remaining,
+                              // so we can show e.g. "Sisa 10 pcs (1 paket)"
+                              const matchingPkg = row.packages.find(
+                                (p) => remaining > 0 && remaining % p.qtyPerPackage === 0
+                              );
+                              const pkgEquiv = matchingPkg && remaining > 0
+                                ? ` = ${remaining / matchingPkg.qtyPerPackage}× ${matchingPkg.label}`
+                                : "";
+                              return (
+                                <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                  isExhausted
+                                    ? "bg-slate-200 text-slate-500"
+                                    : isOverLimit
+                                    ? "bg-red-100 text-red-700"
+                                    : remaining <= maxQty * 0.2
+                                    ? "bg-amber-100 text-amber-700"
+                                    : "bg-blue-100 text-blue-700"
+                                }`}>
+                                  <ShieldAlert className="w-3 h-3" />
+                                  {isExhausted
+                                    ? "Habis"
+                                    : `Sisa ${remaining} ${row.satuan}${pkgEquiv}`}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
 
-                        {/* Limit progress bar */}
+                        {/* Limit progress bar — shows pcs and package equivalents */}
                         {isLimited && (
-                          <div className="px-3 pb-1.5 bg-slate-50 border-b border-slate-100">
-                            <div className="flex justify-between text-xs text-slate-400 mb-0.5">
-                              <span>Sudah dibeli: {boughtQty} / {maxQty} {row.satuan}</span>
-                              <span>{Math.round((boughtQty / maxQty) * 100)}%</span>
+                          <div className="px-3 pb-2 bg-slate-50 border-b border-slate-100">
+                            <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                              <span>
+                                Dibeli: <span className="font-semibold text-slate-700">{boughtQty}</span> / {maxQty} {row.satuan}
+                                {/* Show package equivalents for bought */}
+                                {row.packages.map((pkg) => {
+                                  if (boughtQty > 0 && boughtQty % pkg.qtyPerPackage === 0) {
+                                    return (
+                                      <span key={pkg.id} className="ml-1 text-slate-400">
+                                        ({boughtQty / pkg.qtyPerPackage}× {pkg.label})
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </span>
+                              <span className="font-semibold">
+                                {maxQty > 0 ? Math.round((boughtQty / maxQty) * 100) : 0}%
+                                {/* Show max in package terms */}
+                                {row.packages.map((pkg) => {
+                                  if (maxQty % pkg.qtyPerPackage === 0) {
+                                    return (
+                                      <span key={pkg.id} className="ml-1 text-slate-400 font-normal">
+                                        = {maxQty / pkg.qtyPerPackage}× {pkg.label}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </span>
                             </div>
                             <div className="w-full bg-slate-200 rounded-full h-1.5">
                               <div
@@ -581,7 +617,16 @@ export default function TeamPage() {
                                 <div className="flex items-center gap-3">
                                   <span className="text-xs text-slate-500 flex-1">
                                     Jumlah ({row.satuan})
-                                    {isLimited && <span className="text-blue-600 ml-1">· maks {remaining}</span>}
+                                    {isLimited && remaining !== Infinity && (
+                                      <span className="text-blue-600 ml-1">
+                                        · sisa {remaining} {row.satuan}
+                                        {row.packages.map((pkg) =>
+                                          remaining % pkg.qtyPerPackage === 0 && remaining > 0 ? (
+                                            <span key={pkg.id}> ({remaining / pkg.qtyPerPackage}× {pkg.label})</span>
+                                          ) : null
+                                        )}
+                                      </span>
+                                    )}
                                   </span>
                                   <input
                                     type="number"
@@ -620,9 +665,9 @@ export default function TeamPage() {
                                       <p className="text-xs text-slate-600 font-medium">{activePkg?.label}</p>
                                       <p className="text-xs text-slate-400">
                                         {formatRupiah(activePkg?.hargaPerPackage ?? 0)} / paket · berisi {activePkg?.qtyPerPackage} {row.satuan}
-                                        {isLimited && activePkg && (
-                                          <span className="text-blue-600 ml-1">
-                                            · maks {Math.floor(remaining / activePkg.qtyPerPackage)} paket
+                                        {isLimited && activePkg && remaining !== Infinity && (
+                                          <span className="text-blue-600 ml-1 font-medium">
+                                            · sisa {Math.floor(remaining / activePkg.qtyPerPackage)} paket ({remaining} {row.satuan})
                                           </span>
                                         )}
                                       </p>

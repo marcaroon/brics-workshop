@@ -1,8 +1,6 @@
-// src/types/index.ts
-
 export interface PackageOption {
-  id: string;            // e.g. "pkg-mat-1-0"
-  label: string;         // e.g. "Per 10 Pcs"
+  id: string; // eg "pkg-mat-1-0"
+  label: string; // eg "Per 10 Pcs"
   qtyPerPackage: number; // how many individual units in 1 package
   hargaPerPackage: number; // total price per package
 }
@@ -13,8 +11,8 @@ export interface MaterialItem {
   satuan: string;
   hargaPerPcs: number;
   packages?: PackageOption[]; // optional: package purchase options
-  imageUrl?: string;           // Cloudinary URL
-  order?: number;              // for drag-to-reorder
+  imageUrl?: string; // cloudinary URL
+  order?: number; // for drag-to-reorder
 }
 
 export interface PaymentStage {
@@ -33,10 +31,10 @@ export interface TeamPaymentStatus {
 }
 
 /**
- * Purchase limits per team.
- * Stored as a map: materialId → maxQty (in base units, i.e. satuan).
- * A value of 0 or undefined means unlimited.
- * Stored in Firestore as collection "teamLimits", doc id = teamId.
+ * purchase limits per team.
+ * stored as a map: materialId → maxQty (in base units, i.e. satuan).
+ * a value of 0 or undefined means unlimited.
+ * stored in Firestore as collection "teamLimits", doc id = teamId.
  */
 export interface TeamLimits {
   teamId: string;
@@ -73,7 +71,7 @@ export interface PurchaseEntry {
   hargaPerPcs: number;
   jumlah: number;
   totalHarga: number;
-  // Package info (populated when bought as package)
+  // package info (populated when bought as package)
   isPackage?: boolean;
   packageLabel?: string;
   qtyPerPackage?: number;

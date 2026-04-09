@@ -1,9 +1,4 @@
-// src/lib/cloudinary.ts
 
-/**
- * Upload a file to Cloudinary using an unsigned upload preset.
- * Returns the secure URL of the uploaded image.
- */
 export async function uploadToCloudinary(
   file: File,
   cloudName: string,

@@ -1,4 +1,3 @@
-// src/lib/exportExcel.ts
 import { TeamSummary, WorkshopSettings } from "@/types";
 import { formatRupiah } from "./utils";
 import { BONUS_PENALTY_VALUE } from "./defaultData";
