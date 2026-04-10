@@ -30,7 +30,7 @@ import {
 import { formatRupiah, getSpendingStatus } from "@/lib/utils";
 import { exportRekapCSV } from "@/lib/exportExcel";
 import Leaderboard from "@/components/Leaderboard";
-import { BONUS_PENALTY_VALUE } from "@/lib/defaultData";
+import { BONUS_PENALTY_VALUE, WORKSHOP_ID } from "@/lib/defaultData";
 import {
   Settings,
   Users,
@@ -138,27 +138,32 @@ export default function AdminPage() {
       setSummaries(buildSummaries(t, allSubs, allPay, ws));
 
       // Build local limitsEdit from fetched data
-      const editState: LimitsEditState = {};
-      t.forEach((team) => {
-        const tl = allLimits.find((l) => l.teamId === team.id);
-        editState[team.id] = {};
-        ws.materials.forEach((m) => {
-          const matLimit = tl?.limits?.[m.id];
-          const pkgEdits: Record<string, string> = {};
-          (m.packages ?? []).forEach((pkg) => {
-            const v = matLimit?.packageLimits?.[pkg.id] ?? 0;
-            pkgEdits[pkg.id] = v === 0 ? "" : String(v);
-          });
-          editState[team.id][m.id] = {
-            unitLimit: matLimit?.unitLimit ? String(matLimit.unitLimit) : "",
-            packageLimits: pkgEdits,
-          };
-        });
+      // Di dalam load(), pastikan pakai ws.materials bukan settingsForm.materials
+const editState: LimitsEditState = {};
+t.forEach((team) => {
+  const tl = allLimits.find((l) => l.teamId === team.id);
+  editState[team.id] = {};
+  
+  // ✅ Pakai ws.materials — fresh dari Firestore
+  ws.materials
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+    .forEach((m) => {
+      const matLimit = tl?.limits?.[m.id];
+      const pkgEdits: Record<string, string> = {};
+      (m.packages ?? []).forEach((pkg) => {
+        const v = matLimit?.packageLimits?.[pkg.id] ?? 0;
+        pkgEdits[pkg.id] = v === 0 ? "" : String(v);
       });
-      setLimitsEdit(editState);
-      if (t.length > 0 && !limitsSelectedTeam) {
-        setLimitsSelectedTeam(t[0].id);
-      }
+      editState[team.id][m.id] = {
+        unitLimit: matLimit?.unitLimit ? String(matLimit.unitLimit) : "",
+        packageLimits: pkgEdits,
+      };
+    });
+});
+
+if (!savingLimits) {
+  setLimitsEdit(editState);
+}
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -428,37 +433,56 @@ export default function AdminPage() {
     }));
   }
 
-  /** Convert the edit state for a team into the Firestore-ready limits map */
   function buildLimitsPayload(teamId: string): TeamLimits["limits"] {
-    const teamEdit = limitsEdit[teamId] ?? {};
-    const result: TeamLimits["limits"] = {};
-    Object.entries(teamEdit).forEach(([matId, edit]) => {
-      const matLimit: MaterialLimit = {};
-      const unitVal = edit.unitLimit === "" ? 0 : Number(edit.unitLimit);
-      if (unitVal > 0) matLimit.unitLimit = unitVal;
+  const teamEdit = limitsEdit[teamId] ?? {};
+  const result: TeamLimits["limits"] = {};
+  Object.entries(teamEdit).forEach(([matId, edit]) => {
+    const matLimit: MaterialLimit = {};
+    const unitVal = edit.unitLimit === "" ? 0 : Number(edit.unitLimit);
+    if (unitVal > 0) matLimit.unitLimit = unitVal;
 
-      const pkgLimits: Record<string, number> = {};
-      Object.entries(edit.packageLimits ?? {}).forEach(([pkgId, v]) => {
-        const n = v === "" ? 0 : Number(v);
-        if (n > 0) pkgLimits[pkgId] = n;
-      });
-      if (Object.keys(pkgLimits).length > 0) matLimit.packageLimits = pkgLimits;
-
-      // Only include the entry if something is set
-      if (matLimit.unitLimit !== undefined || matLimit.packageLimits !== undefined) {
-        result[matId] = matLimit;
-      }
+    const pkgLimits: Record<string, number> = {};
+    Object.entries(edit.packageLimits ?? {}).forEach(([pkgId, v]) => {
+      const n = v === "" ? 0 : Number(v);
+      if (n > 0) pkgLimits[pkgId] = n;
     });
-    return result;
-  }
+    if (Object.keys(pkgLimits).length > 0) matLimit.packageLimits = pkgLimits;
 
-  async function handleSaveLimits(teamId: string) {
-    setSavingLimits(teamId);
+    result[matId] = matLimit;
+  });
+  return result;
+}
+
+ async function handleSaveLimits(teamId: string) {
+  setSavingLimits(teamId);
+  try {
     const payload = buildLimitsPayload(teamId);
     await setTeamLimits(teamId, payload);
-    await load();
+    
+    // Update allTeamLimits di state lokal tanpa reload penuh
+    setAllTeamLimits((prev) => {
+      const exists = prev.find((l) => l.teamId === teamId);
+      const updated: TeamLimits = {
+        teamId,
+        workshopId: WORKSHOP_ID,
+        limits: payload,
+      };
+      if (exists) {
+        return prev.map((l) => (l.teamId === teamId ? updated : l));
+      }
+      return [...prev, updated];
+    });
+    
+    // Rebuild summaries dengan data terbaru (tidak perlu fetch ulang)
+    // Tampilkan feedback sukses
+    alert("Batas pembelian berhasil disimpan!");
+  } catch (err) {
+    alert("Gagal menyimpan batas. Coba lagi.");
+    console.error(err);
+  } finally {
     setSavingLimits(null);
   }
+}
 
   function handleCopyLimits(fromTeamId: string, toTeamId: string) {
     const source = limitsEdit[fromTeamId] ?? {};

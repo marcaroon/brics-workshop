@@ -122,12 +122,19 @@ export async function getAllSubmissions(): Promise<DailySubmission[]> {
 export async function submitDailyPurchase(
   submission: Omit<DailySubmission, "id" | "submittedAt" | "locked">,
 ): Promise<string> {
-  const ref = await addDoc(collection(db, "submissions"), {
+  const docId = `${submission.workshopId}_${submission.teamId}_${submission.hari}`;
+  
+  const existing = await getDoc(doc(db, "submissions", docId));
+  if (existing.exists()) {
+    throw new Error(`ALREADY_SUBMITTED:${submission.hari}`);
+  }
+  
+  await setDoc(doc(db, "submissions", docId), {
     ...submission,
     locked: true,
     submittedAt: serverTimestamp(),
   });
-  return ref.id;
+  return docId;
 }
 
 export async function checkDaySubmitted(
@@ -259,9 +266,13 @@ export async function setTeamLimits(
   teamId: string,
   limits: TeamLimits["limits"],
 ): Promise<void> {
-  await setDoc(doc(db, "teamLimits", teamId), {
-    workshopId: WORKSHOP_ID,
-    teamId,
-    limits,
-  });
+  await setDoc(
+    doc(db, "teamLimits", teamId),
+    {
+      workshopId: WORKSHOP_ID,
+      teamId,
+      limits,
+    },
+    { merge: false } 
+  );
 }
