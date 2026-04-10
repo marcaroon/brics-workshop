@@ -219,10 +219,25 @@ export async function setPaymentStatus(
 
 // ─── Team Purchase Limits ─────────────────────────────────────────────
 //
-// Stored in collection "teamLimits", one doc per team.
-// Doc ID = teamId.
-// Shape: { workshopId, teamId, limits: { [materialId]: maxQty } }
-// maxQty is in base units (satuan). 0 means unlimited.
+// Stored in collection "teamLimits", one doc per team (doc id = teamId).
+//
+// Shape:
+//   {
+//     workshopId,
+//     teamId,
+//     limits: {
+//       [materialId]: {
+//         unitLimit: number,          // max pcs in retail/satuan mode (0 = unlimited)
+//         packageLimits: {            // max *packages* per package option (0 = unlimited)
+//           [packageId]: number
+//         }
+//       }
+//     }
+//   }
+//
+// Tracking is done per purchase mode:
+//   - retail purchases (isPackage=false) consume `unitLimit`
+//   - package purchases (isPackage=true, packageId=X) consume `packageLimits[X]`
 
 export async function getAllTeamLimits(): Promise<TeamLimits[]> {
   const q = query(
@@ -242,7 +257,7 @@ export async function getTeamLimits(teamId: string): Promise<TeamLimits | null> 
 
 export async function setTeamLimits(
   teamId: string,
-  limits: Record<string, number>,
+  limits: TeamLimits["limits"],
 ): Promise<void> {
   await setDoc(doc(db, "teamLimits", teamId), {
     workshopId: WORKSHOP_ID,

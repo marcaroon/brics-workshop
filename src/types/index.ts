@@ -31,15 +31,31 @@ export interface TeamPaymentStatus {
 }
 
 /**
- * purchase limits per team.
- * stored as a map: materialId → maxQty (in base units, i.e. satuan).
- * a value of 0 or undefined means unlimited.
- * stored in Firestore as collection "teamLimits", doc id = teamId.
+ * Per-material purchase limits for a team.
+ *
+ * Each material can have:
+ *   - `packageLimits`: a map of packageId → max number of *packages* that
+ *     can be purchased for that package option (cumulative across all days).
+ *   - `unitLimit`: max number of individual units (satuan) that can be
+ *     purchased in retail/satuan mode (cumulative across all days).
+ *
+ * A value of 0 or a missing key means unlimited for that mode.
+ *
+ * Example — "Large Brick":
+ *   packageLimits: { "pkg-b-0": 7 }   → max 7 packs of 50 pcs
+ *   unitLimit: 10                       → max 10 loose pcs
+ *
+ * Stored in Firestore collection "teamLimits", doc id = teamId.
  */
+export interface MaterialLimit {
+  packageLimits?: Record<string, number>; // packageId → max packages (0 = unlimited)
+  unitLimit?: number; // max pcs in retail mode (0 = unlimited)
+}
+
 export interface TeamLimits {
   teamId: string;
   workshopId: string;
-  limits: Record<string, number>; // materialId → maxQty (0 = unlimited)
+  limits: Record<string, MaterialLimit>; // materialId → MaterialLimit
 }
 
 export interface WorkshopSettings {
@@ -76,6 +92,7 @@ export interface PurchaseEntry {
   packageLabel?: string;
   qtyPerPackage?: number;
   packageCount?: number; // how many packages bought
+  packageId?: string; // which PackageOption was used
 }
 
 export interface DailySubmission {

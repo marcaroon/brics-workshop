@@ -112,11 +112,47 @@ function rowToEntry(row: CartRow): PurchaseEntry | null {
     packageLabel: pkg.label,
     qtyPerPackage: pkg.qtyPerPackage,
     packageCount: row.pkgCount,
+    packageId: pkg.id,
   };
 }
 
 function rowTotal(row: CartRow): number {
   return rowToEntry(row)?.totalHarga ?? 0;
+}
+
+// ─── Limit helpers ────────────────────────────────────────────────────
+
+/**
+ * How many packages of a specific package option have already been bought
+ * (summed across all submitted days).
+ */
+function getBoughtPackages(
+  submissions: DailySubmission[],
+  materialId: string,
+  packageId: string,
+): number {
+  return submissions.reduce((sum, sub) => {
+    const entry = sub.entries.find(
+      (e) => e.materialId === materialId && e.isPackage && e.packageId === packageId,
+    );
+    return sum + (entry?.packageCount ?? 0);
+  }, 0);
+}
+
+/**
+ * How many loose (retail) units of a material have already been bought
+ * (summed across all submitted days).
+ */
+function getBoughtUnits(
+  submissions: DailySubmission[],
+  materialId: string,
+): number {
+  return submissions.reduce((sum, sub) => {
+    const entry = sub.entries.find(
+      (e) => e.materialId === materialId && !e.isPackage,
+    );
+    return sum + (entry?.jumlah ?? 0);
+  }, 0);
 }
 
 // ─── Main page ────────────────────────────────────────────────────────
@@ -187,31 +223,35 @@ export default function TeamPage() {
     );
   }
 
-  // ─── Helper: how much of a material has already been bought (all days) ──
+  // ─── Limit queries ────────────────────────────────────────────────
 
-  function getBoughtQty(materialId: string): number {
-    return submissions.reduce((sum, sub) => {
-      const entry = sub.entries.find((e) => e.materialId === materialId);
-      return sum + (entry?.jumlah ?? 0);
-    }, 0);
+  /** Max packages allowed for a given package option. 0 = unlimited. */
+  function getMaxPackages(materialId: string, packageId: string): number {
+    return teamLimits?.limits?.[materialId]?.packageLimits?.[packageId] ?? 0;
   }
 
-  function getMaxQty(materialId: string): number {
-    return teamLimits?.limits?.[materialId] ?? 0; // 0 = unlimited
+  /** Max loose units allowed for a material (retail mode). 0 = unlimited. */
+  function getMaxUnits(materialId: string): number {
+    return teamLimits?.limits?.[materialId]?.unitLimit ?? 0;
   }
 
-  /**
-   * How many more units a team can buy today for a given material.
-   * Returns Infinity if unlimited.
-   */
-  function getRemainingQty(materialId: string): number {
-    const max = getMaxQty(materialId);
+  /** Remaining packages a team can still buy for a specific package option. */
+  function getRemainingPackages(materialId: string, packageId: string): number {
+    const max = getMaxPackages(materialId, packageId);
     if (max === 0) return Infinity;
-    const bought = getBoughtQty(materialId);
+    const bought = getBoughtPackages(submissions, materialId, packageId);
     return Math.max(0, max - bought);
   }
 
-  // ─── Cart mutations ─────────────────────────────────────────────────
+  /** Remaining loose units a team can still buy for a material. */
+  function getRemainingUnits(materialId: string): number {
+    const max = getMaxUnits(materialId);
+    if (max === 0) return Infinity;
+    const bought = getBoughtUnits(submissions, materialId);
+    return Math.max(0, max - bought);
+  }
+
+  // ─── Cart mutations ───────────────────────────────────────────────
 
   function setMode(idx: number, mode: "satuan" | "paket") {
     setCart((prev) =>
@@ -221,7 +261,7 @@ export default function TeamPage() {
 
   function setSatuanJumlah(idx: number, val: string) {
     const row = cart[idx];
-    const remaining = getRemainingQty(row.materialId);
+    const remaining = getRemainingUnits(row.materialId);
     const n = Math.max(0, parseInt(val) || 0);
     const clamped = remaining === Infinity ? n : Math.min(n, remaining);
     setCart((prev) => prev.map((r, i) => (i === idx ? { ...r, satuanJumlah: clamped } : r)));
@@ -236,23 +276,12 @@ export default function TeamPage() {
   function setPkgCount(idx: number, val: string) {
     const row = cart[idx];
     const n = Math.max(0, parseInt(val) || 0);
-    const remaining = getRemainingQty(row.materialId);
-
-    if (remaining === Infinity) {
-      setCart((prev) => prev.map((r, i) => (i === idx ? { ...r, pkgCount: n } : r)));
-      return;
-    }
-
-    // Clamp: how many packages fit within remaining?
-    const activePkg = row.packages.find((p) => p.id === row.selectedPkgId);
-    const qtyPerPkg = activePkg?.qtyPerPackage ?? 1;
-    const maxPkgs = Math.floor(remaining / qtyPerPkg);
-    setCart((prev) =>
-      prev.map((r, i) => (i === idx ? { ...r, pkgCount: Math.min(n, maxPkgs) } : r))
-    );
+    const remaining = getRemainingPackages(row.materialId, row.selectedPkgId);
+    const clamped = remaining === Infinity ? n : Math.min(n, remaining);
+    setCart((prev) => prev.map((r, i) => (i === idx ? { ...r, pkgCount: clamped } : r)));
   }
 
-  // ─── Derived totals ─────────────────────────────────────────────────
+  // ─── Derived totals ───────────────────────────────────────────────
 
   const cartTotal = cart.reduce((s, row) => s + rowTotal(row), 0);
   const prevTotal = submissions.reduce((s, sub) => s + sub.totalHari, 0);
@@ -276,13 +305,15 @@ export default function TeamPage() {
     ? [...settings.materials].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     : [];
 
-  // ─── Limit violations in current cart ────────────────────────────────
+  // ─── Limit violation detection ────────────────────────────────────
 
   interface LimitViolation {
     namaKomponen: string;
+    mode: "package" | "unit";
+    packageLabel?: string;
     requested: number;
     remaining: number;
-    satuan: string;
+    unit: string; // "paket" | satuan string
   }
 
   function getLimitViolations(): LimitViolation[] {
@@ -290,14 +321,31 @@ export default function TeamPage() {
     cart.forEach((row) => {
       const entry = rowToEntry(row);
       if (!entry) return;
-      const remaining = getRemainingQty(row.materialId);
-      if (remaining !== Infinity && entry.jumlah > remaining) {
-        violations.push({
-          namaKomponen: row.namaKomponen,
-          requested: entry.jumlah,
-          remaining,
-          satuan: row.satuan,
-        });
+
+      if (entry.isPackage && entry.packageId) {
+        const remaining = getRemainingPackages(row.materialId, entry.packageId);
+        if (remaining !== Infinity && (entry.packageCount ?? 0) > remaining) {
+          const pkg = row.packages.find((p) => p.id === entry.packageId);
+          violations.push({
+            namaKomponen: row.namaKomponen,
+            mode: "package",
+            packageLabel: pkg?.label,
+            requested: entry.packageCount ?? 0,
+            remaining,
+            unit: "paket",
+          });
+        }
+      } else if (!entry.isPackage) {
+        const remaining = getRemainingUnits(row.materialId);
+        if (remaining !== Infinity && entry.jumlah > remaining) {
+          violations.push({
+            namaKomponen: row.namaKomponen,
+            mode: "unit",
+            requested: entry.jumlah,
+            remaining,
+            unit: row.satuan,
+          });
+        }
       }
     });
     return violations;
@@ -306,13 +354,19 @@ export default function TeamPage() {
   const limitViolations = getLimitViolations();
   const hasLimitViolation = limitViolations.length > 0;
 
-  // ─── Submit ─────────────────────────────────────────────────────────
+  // ─── Submit ───────────────────────────────────────────────────────
 
   async function handleSubmit() {
     if (!team || !settings) return;
 
     if (hasLimitViolation) {
-      const names = limitViolations.map((v) => `• ${v.namaKomponen}: minta ${v.requested}, sisa ${v.remaining} ${v.satuan}`).join("\n");
+      const names = limitViolations
+        .map((v) =>
+          v.mode === "package"
+            ? `• ${v.namaKomponen} (${v.packageLabel}): minta ${v.requested} paket, sisa ${v.remaining} paket`
+            : `• ${v.namaKomponen} (satuan): minta ${v.requested} ${v.unit}, sisa ${v.remaining} ${v.unit}`
+        )
+        .join("\n");
       alert(`Pembelian melebihi batas yang ditetapkan:\n\n${names}\n\nKurangi jumlah pembelian terlebih dahulu.`);
       return;
     }
@@ -468,19 +522,48 @@ export default function TeamPage() {
                     const hasPkgs = row.packages.length > 0;
                     const activePkg = row.packages.find((p) => p.id === row.selectedPkgId);
                     const rowAmt = rowTotal(row);
-                    const maxQty = getMaxQty(row.materialId);
-                    const boughtQty = getBoughtQty(row.materialId);
-                    const remaining = getRemainingQty(row.materialId);
-                    const isLimited = maxQty > 0;
-                    const isExhausted = isLimited && remaining === 0;
+
+                    // Per-mode limit info for the active selection
+                    const activePkgRemaining = activePkg
+                      ? getRemainingPackages(row.materialId, activePkg.id)
+                      : Infinity;
+                    const unitRemaining = getRemainingUnits(row.materialId);
+                    const maxPkgLimit = activePkg ? getMaxPackages(row.materialId, activePkg.id) : 0;
+                    const maxUnitLimit = getMaxUnits(row.materialId);
+
+                    const isPkgExhausted = hasPkgs && activePkg
+                      ? (maxPkgLimit > 0 && activePkg
+                          ? getBoughtPackages(submissions, row.materialId, activePkg.id) >= maxPkgLimit
+                          : false)
+                      : false;
+                    const isUnitExhausted = maxUnitLimit > 0 &&
+                      getBoughtUnits(submissions, row.materialId) >= maxUnitLimit;
+
+                    // In current mode, is the item completely exhausted?
+                    const isCurrentModeExhausted =
+                      row.mode === "paket" ? isPkgExhausted : isUnitExhausted;
+
                     const entry = rowToEntry(row);
-                    const isOverLimit = isLimited && entry !== null && entry.jumlah > remaining;
+                    const isOverLimitPkg =
+                      entry?.isPackage && activePkg && activePkgRemaining !== Infinity
+                        ? (entry.packageCount ?? 0) > activePkgRemaining
+                        : false;
+                    const isOverLimitUnit =
+                      entry && !entry.isPackage && unitRemaining !== Infinity
+                        ? entry.jumlah > unitRemaining
+                        : false;
+                    const isOverLimit = isOverLimitPkg || isOverLimitUnit;
+
+                    // Does this material have ANY active limit configured?
+                    const hasAnyLimit =
+                      maxUnitLimit > 0 ||
+                      row.packages.some((p) => getMaxPackages(row.materialId, p.id) > 0);
 
                     return (
                       <div
                         key={row.materialId}
                         className={`rounded-xl border overflow-hidden ${
-                          isExhausted
+                          isCurrentModeExhausted
                             ? "border-slate-300 bg-slate-50 opacity-60"
                             : isOverLimit
                             ? "border-red-400"
@@ -488,8 +571,7 @@ export default function TeamPage() {
                         }`}
                       >
                         {/* Material header row */}
-                        <div className={`flex items-center gap-3 px-3 pt-3 pb-2 ${isExhausted ? "bg-slate-100" : "bg-slate-50"}`}>
-                          {/* Thumbnail */}
+                        <div className={`flex items-center gap-3 px-3 pt-3 pb-2 ${isCurrentModeExhausted ? "bg-slate-100" : "bg-slate-50"}`}>
                           {mat?.imageUrl ? (
                             <button type="button" onClick={() => setPreviewImage({ src: mat.imageUrl!, name: row.namaKomponen })} className="flex-shrink-0">
                               <img src={mat.imageUrl} alt={row.namaKomponen} className="w-10 h-10 rounded-lg object-cover border border-slate-200 hover:opacity-80 transition-opacity" />
@@ -511,196 +593,247 @@ export default function TeamPage() {
                             {rowAmt > 0 && (
                               <span className="text-sm font-bold text-blue-700">{formatRupiah(rowAmt)}</span>
                             )}
-                            {/* Limit badge — shows pcs remaining AND package equivalent */}
-                            {isLimited && (() => {
-                              // Find the "smallest" package that divides evenly into remaining,
-                              // so we can show e.g. "Sisa 10 pcs (1 paket)"
-                              const matchingPkg = row.packages.find(
-                                (p) => remaining > 0 && remaining % p.qtyPerPackage === 0
-                              );
-                              const pkgEquiv = matchingPkg && remaining > 0
-                                ? ` = ${remaining / matchingPkg.qtyPerPackage}× ${matchingPkg.label}`
-                                : "";
-                              return (
-                                <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                                  isExhausted
-                                    ? "bg-slate-200 text-slate-500"
-                                    : isOverLimit
-                                    ? "bg-red-100 text-red-700"
-                                    : remaining <= maxQty * 0.2
-                                    ? "bg-amber-100 text-amber-700"
-                                    : "bg-blue-100 text-blue-700"
-                                }`}>
-                                  <ShieldAlert className="w-3 h-3" />
-                                  {isExhausted
-                                    ? "Habis"
-                                    : `Sisa ${remaining} ${row.satuan}${pkgEquiv}`}
-                                </span>
-                              );
+                            {/* Show a limit badge only if a limit exists for the current mode */}
+                            {hasAnyLimit && (() => {
+                              if (row.mode === "paket" && activePkg && maxPkgLimit > 0) {
+                                const boughtPkgs = getBoughtPackages(submissions, row.materialId, activePkg.id);
+                                const remPkgs = activePkgRemaining;
+                                return (
+                                  <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                    remPkgs === 0
+                                      ? "bg-slate-200 text-slate-500"
+                                      : isOverLimitPkg
+                                      ? "bg-red-100 text-red-700"
+                                      : boughtPkgs / maxPkgLimit >= 0.8
+                                      ? "bg-amber-100 text-amber-700"
+                                      : "bg-blue-100 text-blue-700"
+                                  }`}>
+                                    <ShieldAlert className="w-3 h-3" />
+                                    {remPkgs === 0 ? "Paket habis" : `Sisa ${remPkgs} paket`}
+                                  </span>
+                                );
+                              }
+                              if (row.mode === "satuan" && maxUnitLimit > 0) {
+                                return (
+                                  <span className={`flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                    unitRemaining === 0
+                                      ? "bg-slate-200 text-slate-500"
+                                      : isOverLimitUnit
+                                      ? "bg-red-100 text-red-700"
+                                      : "bg-blue-100 text-blue-700"
+                                  }`}>
+                                    <ShieldAlert className="w-3 h-3" />
+                                    {unitRemaining === 0 ? "Satuan habis" : `Sisa ${unitRemaining} ${row.satuan}`}
+                                  </span>
+                                );
+                              }
+                              return null;
                             })()}
                           </div>
                         </div>
 
-                        {/* Limit progress bar — shows pcs and package equivalents */}
-                        {isLimited && (
-                          <div className="px-3 pb-2 bg-slate-50 border-b border-slate-100">
-                            <div className="flex justify-between text-xs text-slate-500 mb-0.5">
-                              <span>
-                                Dibeli: <span className="font-semibold text-slate-700">{boughtQty}</span> / {maxQty} {row.satuan}
-                                {/* Show package equivalents for bought */}
-                                {row.packages.map((pkg) => {
-                                  if (boughtQty > 0 && boughtQty % pkg.qtyPerPackage === 0) {
-                                    return (
-                                      <span key={pkg.id} className="ml-1 text-slate-400">
-                                        ({boughtQty / pkg.qtyPerPackage}× {pkg.label})
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })}
-                              </span>
-                              <span className="font-semibold">
-                                {maxQty > 0 ? Math.round((boughtQty / maxQty) * 100) : 0}%
-                                {/* Show max in package terms */}
-                                {row.packages.map((pkg) => {
-                                  if (maxQty % pkg.qtyPerPackage === 0) {
-                                    return (
-                                      <span key={pkg.id} className="ml-1 text-slate-400 font-normal">
-                                        = {maxQty / pkg.qtyPerPackage}× {pkg.label}
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })}
-                              </span>
-                            </div>
-                            <div className="w-full bg-slate-200 rounded-full h-1.5">
-                              <div
-                                className={`h-1.5 rounded-full transition-all ${
-                                  boughtQty >= maxQty
-                                    ? "bg-slate-400"
-                                    : boughtQty / maxQty >= 0.8
-                                    ? "bg-amber-500"
-                                    : "bg-blue-500"
-                                }`}
-                                style={{ width: `${Math.min((boughtQty / maxQty) * 100, 100)}%` }}
-                              />
-                            </div>
+                        {/* Mode toggle */}
+                        {hasPkgs && (
+                          <div className="flex gap-1 px-3 pb-2 bg-slate-50 border-b border-slate-200">
+                            <button
+                              type="button"
+                              onClick={() => setMode(idx, "paket")}
+                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                                row.mode === "paket"
+                                  ? "bg-blue-700 text-white"
+                                  : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"
+                              }`}
+                            >
+                              <Package className="w-3.5 h-3.5" /> Beli Paket
+                              {/* Show exhausted badge on mode toggle */}
+                              {isPkgExhausted && <span className="ml-1 text-xs opacity-70">(habis)</span>}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setMode(idx, "satuan")}
+                              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+                                row.mode === "satuan"
+                                  ? "bg-blue-700 text-white"
+                                  : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"
+                              }`}
+                            >
+                              <Layers className="w-3.5 h-3.5" /> Beli Satuan
+                              {isUnitExhausted && <span className="ml-1 text-xs opacity-70">(habis)</span>}
+                            </button>
                           </div>
                         )}
 
-                        {/* Exhausted overlay message */}
-                        {isExhausted && (
-                          <div className="px-3 py-2.5 bg-slate-50 text-xs text-slate-500 italic flex items-center gap-2">
-                            <Lock className="w-3.5 h-3.5" /> Batas pembelian untuk material ini sudah tercapai.
-                          </div>
-                        )}
-
-                        {/* Mode toggle + input (hidden when exhausted) */}
-                        {!isExhausted && (
-                          <>
-                            {/* Mode toggle */}
-                            {hasPkgs && (
-                              <div className="flex gap-1 px-3 pb-2 bg-slate-50 border-b border-slate-200">
-                                <button type="button" onClick={() => setMode(idx, "paket")} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${row.mode === "paket" ? "bg-blue-700 text-white" : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"}`}>
-                                  <Package className="w-3.5 h-3.5" /> Beli Paket
-                                </button>
-                                <button type="button" onClick={() => setMode(idx, "satuan")} className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors ${row.mode === "satuan" ? "bg-blue-700 text-white" : "bg-white border border-slate-300 text-slate-600 hover:border-blue-400"}`}>
-                                  <Layers className="w-3.5 h-3.5" /> Beli Satuan
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Input area */}
-                            <div className="px-3 py-2.5 bg-white">
-                              {row.mode === "satuan" || !hasPkgs ? (
-                                <div className="flex items-center gap-3">
-                                  <span className="text-xs text-slate-500 flex-1">
-                                    Jumlah ({row.satuan})
-                                    {isLimited && remaining !== Infinity && (
-                                      <span className="text-blue-600 ml-1">
-                                        · sisa {remaining} {row.satuan}
-                                        {row.packages.map((pkg) =>
-                                          remaining % pkg.qtyPerPackage === 0 && remaining > 0 ? (
-                                            <span key={pkg.id}> ({remaining / pkg.qtyPerPackage}× {pkg.label})</span>
-                                          ) : null
-                                        )}
-                                      </span>
-                                    )}
-                                  </span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    max={isLimited ? remaining : undefined}
-                                    value={row.satuanJumlah || ""}
-                                    onChange={(e) => setSatuanJumlah(idx, e.target.value)}
-                                    className={`w-24 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${isOverLimit ? "border-red-400 bg-red-50" : "border-slate-300"}`}
-                                    placeholder="0"
-                                  />
-                                  <div className="w-28 text-right">
-                                    <p className="text-sm font-semibold text-slate-700">
-                                      {row.satuanJumlah > 0 ? formatRupiah(row.satuanJumlah * row.hargaPerPcs) : "-"}
-                                    </p>
+                        {/* Limit progress bars — shown separately per mode */}
+                        {hasAnyLimit && (
+                          <div className="px-3 py-2 bg-slate-50 border-b border-slate-100 space-y-1.5">
+                            {/* Package limit progress (for each package option) */}
+                            {row.packages.map((pkg) => {
+                              const maxPkg = getMaxPackages(row.materialId, pkg.id);
+                              if (maxPkg === 0) return null;
+                              const boughtPkg = getBoughtPackages(submissions, row.materialId, pkg.id);
+                              const pctPkg = Math.min((boughtPkg / maxPkg) * 100, 100);
+                              return (
+                                <div key={pkg.id}>
+                                  <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                                    <span>
+                                      Paket ({pkg.label}): <span className="font-semibold text-slate-700">{boughtPkg}</span> / {maxPkg} paket
+                                    </span>
+                                    <span className="font-semibold">{Math.round(pctPkg)}%</span>
+                                  </div>
+                                  <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full transition-all ${
+                                        boughtPkg >= maxPkg ? "bg-slate-400" : pctPkg >= 80 ? "bg-amber-500" : "bg-blue-500"
+                                      }`}
+                                      style={{ width: `${pctPkg}%` }}
+                                    />
                                   </div>
                                 </div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {row.packages.length > 1 && (
-                                    <div className="flex gap-1 flex-wrap">
-                                      {row.packages.map((pkg) => (
+                              );
+                            })}
+
+                            {/* Unit limit progress */}
+                            {maxUnitLimit > 0 && (() => {
+                              const boughtUnit = getBoughtUnits(submissions, row.materialId);
+                              const pctUnit = Math.min((boughtUnit / maxUnitLimit) * 100, 100);
+                              return (
+                                <div>
+                                  <div className="flex justify-between text-xs text-slate-500 mb-0.5">
+                                    <span>
+                                      Satuan: <span className="font-semibold text-slate-700">{boughtUnit}</span> / {maxUnitLimit} {row.satuan}
+                                    </span>
+                                    <span className="font-semibold">{Math.round(pctUnit)}%</span>
+                                  </div>
+                                  <div className="w-full bg-slate-200 rounded-full h-1.5">
+                                    <div
+                                      className={`h-1.5 rounded-full transition-all ${
+                                        boughtUnit >= maxUnitLimit ? "bg-slate-400" : pctUnit >= 80 ? "bg-amber-500" : "bg-emerald-500"
+                                      }`}
+                                      style={{ width: `${pctUnit}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+
+                        {/* Exhausted overlay */}
+                        {isCurrentModeExhausted && (
+                          <div className="px-3 py-2.5 bg-slate-50 text-xs text-slate-500 italic flex items-center gap-2">
+                            <Lock className="w-3.5 h-3.5" />
+                            {row.mode === "paket"
+                              ? "Batas pembelian paket untuk material ini sudah tercapai."
+                              : "Batas pembelian satuan untuk material ini sudah tercapai."}
+                            {hasPkgs && (
+                              <span>
+                                {row.mode === "paket" && !isUnitExhausted && maxUnitLimit > 0
+                                  ? " Masih bisa beli satuan."
+                                  : row.mode === "satuan" && !isPkgExhausted
+                                  ? " Masih bisa beli paket."
+                                  : ""}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Input area */}
+                        {!isCurrentModeExhausted && (
+                          <div className="px-3 py-2.5 bg-white">
+                            {row.mode === "satuan" || !hasPkgs ? (
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs text-slate-500 flex-1">
+                                  Jumlah ({row.satuan})
+                                  {maxUnitLimit > 0 && unitRemaining !== Infinity && (
+                                    <span className="text-blue-600 ml-1">
+                                      · sisa {unitRemaining} {row.satuan}
+                                    </span>
+                                  )}
+                                </span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max={maxUnitLimit > 0 ? unitRemaining : undefined}
+                                  value={row.satuanJumlah || ""}
+                                  onChange={(e) => setSatuanJumlah(idx, e.target.value)}
+                                  className={`w-24 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                                    isOverLimitUnit ? "border-red-400 bg-red-50" : "border-slate-300"
+                                  }`}
+                                  placeholder="0"
+                                />
+                                <div className="w-28 text-right">
+                                  <p className="text-sm font-semibold text-slate-700">
+                                    {row.satuanJumlah > 0 ? formatRupiah(row.satuanJumlah * row.hargaPerPcs) : "-"}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                {row.packages.length > 1 && (
+                                  <div className="flex gap-1 flex-wrap">
+                                    {row.packages.map((pkg) => {
+                                      const remPkg = getRemainingPackages(row.materialId, pkg.id);
+                                      const maxPkg = getMaxPackages(row.materialId, pkg.id);
+                                      const exhausted = maxPkg > 0 && remPkg === 0;
+                                      return (
                                         <button
                                           key={pkg.id}
                                           type="button"
                                           onClick={() => setSelectedPkg(idx, pkg.id)}
-                                          className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition-colors ${row.selectedPkgId === pkg.id ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 text-slate-600 hover:border-blue-400"}`}
+                                          className={`text-xs px-2.5 py-1 rounded-lg border font-medium transition-colors ${
+                                            row.selectedPkgId === pkg.id
+                                              ? "border-blue-500 bg-blue-50 text-blue-700"
+                                              : exhausted
+                                              ? "border-slate-200 bg-slate-50 text-slate-400"
+                                              : "border-slate-300 text-slate-600 hover:border-blue-400"
+                                          }`}
                                         >
                                           {pkg.label} — {formatRupiah(pkg.hargaPerPackage)}
+                                          {exhausted && " (habis)"}
                                         </button>
-                                      ))}
-                                    </div>
-                                  )}
+                                      );
+                                    })}
+                                  </div>
+                                )}
 
-                                  <div className="flex items-center gap-3">
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-xs text-slate-600 font-medium">{activePkg?.label}</p>
-                                      <p className="text-xs text-slate-400">
-                                        {formatRupiah(activePkg?.hargaPerPackage ?? 0)} / paket · berisi {activePkg?.qtyPerPackage} {row.satuan}
-                                        {isLimited && activePkg && remaining !== Infinity && (
-                                          <span className="text-blue-600 ml-1 font-medium">
-                                            · sisa {Math.floor(remaining / activePkg.qtyPerPackage)} paket ({remaining} {row.satuan})
-                                          </span>
-                                        )}
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-xs text-slate-500">× Paket</span>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max={
-                                          isLimited && activePkg
-                                            ? Math.floor(remaining / activePkg.qtyPerPackage)
-                                            : undefined
-                                        }
-                                        value={row.pkgCount || ""}
-                                        onChange={(e) => setPkgCount(idx, e.target.value)}
-                                        className={`w-20 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${isOverLimit ? "border-red-400 bg-red-50" : "border-slate-300"}`}
-                                        placeholder="0"
-                                      />
-                                    </div>
-                                    <div className="w-28 text-right">
-                                      <p className="text-sm font-semibold text-slate-700">
-                                        {row.pkgCount > 0 ? formatRupiah(row.pkgCount * (activePkg?.hargaPerPackage ?? 0)) : "-"}
-                                      </p>
-                                      {row.pkgCount > 0 && activePkg && (
-                                        <p className="text-xs text-slate-400">= {row.pkgCount * activePkg.qtyPerPackage} {row.satuan}</p>
+                                <div className="flex items-center gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs text-slate-600 font-medium">{activePkg?.label}</p>
+                                    <p className="text-xs text-slate-400">
+                                      {formatRupiah(activePkg?.hargaPerPackage ?? 0)} / paket · berisi {activePkg?.qtyPerPackage} {row.satuan}
+                                      {activePkg && maxPkgLimit > 0 && activePkgRemaining !== Infinity && (
+                                        <span className="text-blue-600 ml-1 font-medium">
+                                          · sisa {activePkgRemaining} paket
+                                        </span>
                                       )}
-                                    </div>
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-xs text-slate-500">× Paket</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={activePkg && maxPkgLimit > 0 ? activePkgRemaining : undefined}
+                                      value={row.pkgCount || ""}
+                                      onChange={(e) => setPkgCount(idx, e.target.value)}
+                                      className={`w-20 text-center border rounded-lg px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                                        isOverLimitPkg ? "border-red-400 bg-red-50" : "border-slate-300"
+                                      }`}
+                                      placeholder="0"
+                                    />
+                                  </div>
+                                  <div className="w-28 text-right">
+                                    <p className="text-sm font-semibold text-slate-700">
+                                      {row.pkgCount > 0 ? formatRupiah(row.pkgCount * (activePkg?.hargaPerPackage ?? 0)) : "-"}
+                                    </p>
+                                    {row.pkgCount > 0 && activePkg && (
+                                      <p className="text-xs text-slate-400">= {row.pkgCount * activePkg.qtyPerPackage} {row.satuan}</p>
+                                    )}
                                   </div>
                                 </div>
-                              )}
-                            </div>
-                          </>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     );
@@ -722,7 +855,6 @@ export default function TeamPage() {
                     <span>{formatRupiah(runningTotal)}</span>
                   </div>
 
-                  {/* Warnings */}
                   {totalPendapatan === 0 && (
                     <div className="mt-2 flex items-center gap-2 text-orange-600 text-xs">
                       <AlertTriangle className="w-4 h-4" />
@@ -736,7 +868,6 @@ export default function TeamPage() {
                     </div>
                   )}
 
-                  {/* Limit violation warning */}
                   {hasLimitViolation && (
                     <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-xl">
                       <div className="flex items-center gap-2 text-red-700 text-xs font-semibold mb-1">
@@ -744,7 +875,9 @@ export default function TeamPage() {
                       </div>
                       {limitViolations.map((v, i) => (
                         <p key={i} className="text-xs text-red-600 ml-6">
-                          {v.namaKomponen}: minta {v.requested} {v.satuan}, sisa {v.remaining} {v.satuan}
+                          {v.namaKomponen}
+                          {v.mode === "package" ? ` (${v.packageLabel})` : " (satuan)"}
+                          : minta {v.requested} {v.unit}, sisa {v.remaining} {v.unit}
                         </p>
                       ))}
                     </div>
